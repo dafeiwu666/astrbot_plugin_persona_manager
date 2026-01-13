@@ -48,6 +48,19 @@ class UserPersona(BaseModel):
     visibility: Visibility = Visibility.PRIVATE
     use_wrapper: bool = True
 
+    # 前后置提示词：当 use_wrapper=True 时生效
+    # - wrapper_use_config=True  -> 使用 conf.default_prefix/suffix
+    # - wrapper_use_config=False -> 使用 wrapper_prefix/wrapper_suffix
+    wrapper_use_config: bool = True
+    wrapper_prefix: str = ""
+    wrapper_suffix: str = ""
+
+    # 注入文本清洗：在注入角色内容前对 persona.content 做正则清洗
+    # - clean_use_config=True  -> 使用 conf.default_clean_regex
+    # - clean_use_config=False -> 使用 clean_regex（为空则不清洗）
+    clean_use_config: bool = False
+    clean_regex: str = ""
+
     owner_name: str = ""
     updated_at: int = 0
 
@@ -107,6 +120,11 @@ class ResolvedPersona(BaseModel):
     content: str
     visibility: Visibility
     use_wrapper: bool
+    wrapper_use_config: bool = True
+    wrapper_prefix: str = ""
+    wrapper_suffix: str = ""
+    clean_use_config: bool = False
+    clean_regex: str = ""
     owner_user_id: str
     owner_name: str
 

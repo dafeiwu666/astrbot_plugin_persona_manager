@@ -891,7 +891,22 @@ async def _handle_import_flow(
     initial_sender_id = str(event.get_sender_id())
 
     yield event.plain_result("请输入角色名称")
-    state: dict[str, Any] = {"name": "", "intro": "", "tags": [], "picks": [], "stage": "name", "options": []}
+    state: dict[str, Any] = {
+        "name": "",
+        "intro": "",
+        "tags": [],
+        "picks": [],
+        "stage": "name",
+        "options": [],
+        # wrapper
+        "use_wrapper": False,
+        "wrapper_use_config": True,
+        "wrapper_prefix": "",
+        "wrapper_suffix": "",
+        # clean
+        "clean_use_config": False,
+        "clean_regex": "",
+    }
 
     @session_waiter(timeout=timeout, record_history_chains=False)
     async def waiter(controller: SessionController, e: AstrMessageEvent):
@@ -921,22 +936,187 @@ async def _handle_import_flow(
         if state["stage"] == "tags":
             t = text.lstrip("/／").strip()
             state["tags"] = [] if t == "跳过" else [x for x in text.split() if x.strip()]
-            state["stage"] = "pick"
+            state["stage"] = "wrapper_choice"
+            await e.send(
+                e.plain_result(
+                    "是否使用已配置好的前后置提示词？\n"
+                    "- /是：使用已配置\n"
+                    "- /否：自定义填写\n"
+                    "- /跳过：不使用\n"
+                    "请输入：/是 /否 /跳过"
+                )
+            )
+            controller.keep(timeout=timeout, reset_timeout=True)
+            return
+
+        if state["stage"] == "wrapper_choice":
+            t = text.lstrip("/／").strip().lower()
+            if t in {"是", "y", "yes", "1", "开启", "开", "使用"}:
+                state["use_wrapper"] = True
+                state["wrapper_use_config"] = True
+                state["stage"] = "clean_choice"
+                await e.send(
+                    e.plain_result(
+                        "是否使用已配置好的正则文本清洗表达式？\n"
+                        "- /是：使用已配置\n"
+                        "- /否：自定义填写\n"
+                        "- /跳过：不使用\n"
+                        "请输入：/是 /否 /跳过"
+                    )
+                )
+                controller.keep(timeout=timeout, reset_timeout=True)
+                return
+
+            if t in {"否", "n", "no", "0", "自定义", "custom"}:
+                state["use_wrapper"] = True
+                state["wrapper_use_config"] = False
+                state["stage"] = "wrapper_prefix"
+                await e.send(e.plain_result("请输入前置提示词（输入 /跳过 表示留空）"))
+                controller.keep(timeout=timeout, reset_timeout=True)
+                return
+
+            if t in {"跳过", "skip"}:
+                state["use_wrapper"] = False
+                state["stage"] = "clean_choice"
+                await e.send(
+                    e.plain_result(
+                        "是否使用已配置好的正则文本清洗表达式？\n"
+                        "- /是：使用已配置\n"
+                        "- /否：自定义填写\n"
+                        "- /跳过：不使用\n"
+                        "请输入：/是 /否 /跳过"
+                    )
+                )
+                controller.keep(timeout=timeout, reset_timeout=True)
+                return
+
+            await e.send(e.plain_result("请输入：/是 /否 /跳过"))
+            controller.keep(timeout=timeout, reset_timeout=True)
+            return
+
+        if state["stage"] == "wrapper_prefix":
+            t = text.lstrip("/／").strip()
+            state["wrapper_prefix"] = "" if t == "跳过" else (e.message_str or "").strip()
+            state["stage"] = "wrapper_suffix"
+            await e.send(e.plain_result("请输入后置提示词（输入 /跳过 表示留空）"))
+            controller.keep(timeout=timeout, reset_timeout=True)
+            return
+
+        if state["stage"] == "wrapper_suffix":
+            t = text.lstrip("/／").strip()
+            state["wrapper_suffix"] = "" if t == "跳过" else (e.message_str or "").strip()
+            state["stage"] = "clean_choice"
+            await e.send(
+                e.plain_result(
+                    "是否使用已配置好的正则文本清洗表达式？\n"
+                    "- /是：使用已配置\n"
+                    "- /否：自定义填写\n"
+                    "- /跳过：不使用\n"
+                    "请输入：/是 /否 /跳过"
+                )
+            )
+            controller.keep(timeout=timeout, reset_timeout=True)
+            return
+
+        if state["stage"] == "clean_choice":
+            t = text.lstrip("/／").strip().lower()
+            if t in {"是", "y", "yes", "1", "开启", "开", "使用"}:
+                state["clean_use_config"] = True
+                state["clean_regex"] = ""
+                state["stage"] = "pick_prep"
+            elif t in {"否", "n", "no", "0", "自定义", "custom"}:
+                state["clean_use_config"] = False
+                state["stage"] = "clean_regex"
+                await e.send(
+                    e.plain_result(
+                        "请输入正则表达式（用于清洗注入的角色内容：re.sub(pattern, '', text)）。\n"
+                        "输入 /跳过 表示不设置。"
+                    )
+                )
+                controller.keep(timeout=timeout, reset_timeout=True)
+                return
+            elif t in {"跳过", "skip"}:
+                state["clean_use_config"] = False
+                state["clean_regex"] = ""
+                state["stage"] = "pick_prep"
+            else:
+                await e.send(e.plain_result("请输入：/是 /否 /跳过"))
+                controller.keep(timeout=timeout, reset_timeout=True)
+                return
+
+            # 进入选择导入内容阶段
+            if state["stage"] == "pick_prep":
+                importable = [f for f in files if _is_importable_text_file(f)]
+                options: list[dict[str, Any]] = [{"type": "body", "label": "正文"}]
+                for f in importable:
+                    options.append({"type": "file", "file": f, "label": f"附件文本：{f.name}"})
+                state["options"] = options
+
+                if len(options) == 1:
+                    state["picks"] = [1]
+                    controller.stop()
+                    return
+
+                state["stage"] = "pick"
+                listing = "请选择要导入的内容序号（支持多选，如：1 3 2；按输入顺序拼接，输入 /跳过 默认仅导入正文）：\n" + "\n".join(
+                    [f"{i}. {opt['label']}" for i, opt in enumerate(options, start=1)]
+                )
+                await e.send(e.plain_result(listing))
+                controller.keep(timeout=timeout, reset_timeout=True)
+                return
+
+        if state["stage"] == "clean_regex":
+            t = text.lstrip("/／").strip()
+            if t in {"跳过", "skip"}:
+                state["clean_regex"] = ""
+                state["stage"] = "pick_prep"
+                # 复用 clean_choice 的 pick_prep 逻辑：直接走一遍
+                importable = [f for f in files if _is_importable_text_file(f)]
+                options: list[dict[str, Any]] = [{"type": "body", "label": "正文"}]
+                for f in importable:
+                    options.append({"type": "file", "file": f, "label": f"附件文本：{f.name}"})
+                state["options"] = options
+
+                if len(options) == 1:
+                    state["picks"] = [1]
+                    controller.stop()
+                    return
+
+                state["stage"] = "pick"
+                listing = "请选择要导入的内容序号（支持多选，如：1 3 2；按输入顺序拼接，输入 /跳过 默认仅导入正文）：\n" + "\n".join(
+                    [f"{i}. {opt['label']}" for i, opt in enumerate(options, start=1)]
+                )
+                await e.send(e.plain_result(listing))
+                controller.keep(timeout=timeout, reset_timeout=True)
+                return
+
+            pattern = (e.message_str or "").strip()
+            if not pattern:
+                await e.send(e.plain_result("请输入正则表达式，或 /跳过。"))
+                controller.keep(timeout=timeout, reset_timeout=True)
+                return
+            try:
+                re.compile(pattern)
+            except Exception:
+                await e.send(e.plain_result("正则表达式无效，请重新输入，或 /跳过。"))
+                controller.keep(timeout=timeout, reset_timeout=True)
+                return
+
+            state["clean_regex"] = pattern
+            state["stage"] = "pick_prep"
 
             importable = [f for f in files if _is_importable_text_file(f)]
-
-            # 导入可多选：正文 / 附件文本 / 两者一起；按输入序号顺序拼接。
             options: list[dict[str, Any]] = [{"type": "body", "label": "正文"}]
             for f in importable:
                 options.append({"type": "file", "file": f, "label": f"附件文本：{f.name}"})
             state["options"] = options
 
             if len(options) == 1:
-                # 只有正文可选则无需再问
                 state["picks"] = [1]
                 controller.stop()
                 return
 
+            state["stage"] = "pick"
             listing = "请选择要导入的内容序号（支持多选，如：1 3 2；按输入顺序拼接，输入 /跳过 默认仅导入正文）：\n" + "\n".join(
                 [f"{i}. {opt['label']}" for i, opt in enumerate(options, start=1)]
             )
@@ -983,6 +1163,12 @@ async def _handle_import_flow(
     tags = state.get("tags") or []
     picks: list[int] = state.get("picks") or []
     options: list[dict[str, Any]] = state.get("options") or []
+    use_wrapper = bool(state.get("use_wrapper") or False)
+    wrapper_use_config = bool(state.get("wrapper_use_config") if state.get("wrapper_use_config") is not None else True)
+    wrapper_prefix = str(state.get("wrapper_prefix") or "")
+    wrapper_suffix = str(state.get("wrapper_suffix") or "")
+    clean_use_config = bool(state.get("clean_use_config") or False)
+    clean_regex = str(state.get("clean_regex") or "")
 
     if not picks:
         picks = [1]
@@ -1019,7 +1205,12 @@ async def _handle_import_flow(
             name=name,
             intro=final_intro,
             content=imported_text,
-            use_wrapper=False,
+            use_wrapper=use_wrapper,
+            wrapper_use_config=wrapper_use_config,
+            wrapper_prefix=wrapper_prefix,
+            wrapper_suffix=wrapper_suffix,
+            clean_use_config=clean_use_config,
+            clean_regex=clean_regex,
             tags=tags,
         )
 

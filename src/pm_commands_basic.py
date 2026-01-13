@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from astrbot.api import logger
 import astrbot.api.message_components as Comp
 from astrbot.api.event import AstrMessageEvent
@@ -88,6 +90,11 @@ async def add_persona(self, event: AstrMessageEvent, 名称: GreedyStr):
                     intro=state.intro,
                     content=content,
                     use_wrapper=bool(state.use_wrapper),
+                    wrapper_use_config=bool(state.wrapper_use_config),
+                    wrapper_prefix=state.wrapper_prefix,
+                    wrapper_suffix=state.wrapper_suffix,
+                    clean_use_config=bool(state.clean_use_config),
+                    clean_regex=state.clean_regex,
                     tags=state.tags,
                 )
                 await e.send(e.plain_result(f"已保存角色：{state.name}"))
@@ -121,10 +128,11 @@ async def add_persona(self, event: AstrMessageEvent, 名称: GreedyStr):
             state.stage = PersonaEditStage.WRAPPER
             await e.send(
                 e.plain_result(
-                    "是否使用已编辑好的前后置破限提示词？\n"
-                    "- /是：使用（默认）\n"
-                    "- /否：不使用\n"
-                    "请输入：/是 或 /否"
+                    "是否使用已配置好的前后置提示词？\n"
+                    "- /是：使用已配置\n"
+                    "- /否：自定义填写\n"
+                    "- /跳过：不使用\n"
+                    "请输入：/是 /否 /跳过"
                 )
             )
             controller.keep(timeout=timeout, reset_timeout=True)
@@ -135,13 +143,129 @@ async def add_persona(self, event: AstrMessageEvent, 名称: GreedyStr):
 
             if t in {"是", "y", "yes", "1", "开启", "开", "使用"}:
                 state.use_wrapper = True
-            elif t in {"否", "n", "no", "0", "关闭", "关", "不使用"}:
-                state.use_wrapper = False
-            else:
-                await e.send(e.plain_result("请输入：/是 或 /否"))
+                state.wrapper_use_config = True
+                state.stage = PersonaEditStage.CLEAN
+                await e.send(
+                    e.plain_result(
+                        "是否使用已配置好的正则文本清洗表达式？\n"
+                        "- /是：使用已配置\n"
+                        "- /否：自定义填写\n"
+                        "- /跳过：不使用\n"
+                        "请输入：/是 /否 /跳过"
+                    )
+                )
                 controller.keep(timeout=timeout, reset_timeout=True)
                 return
 
+            if t in {"否", "n", "no", "0", "自定义", "custom"}:
+                state.use_wrapper = True
+                state.wrapper_use_config = False
+                state.stage = PersonaEditStage.WRAPPER_PREFIX
+                await e.send(e.plain_result("请输入前置提示词（输入 /跳过 表示留空）"))
+                controller.keep(timeout=timeout, reset_timeout=True)
+                return
+
+            if t in {"跳过", "skip"}:
+                state.use_wrapper = False
+                state.stage = PersonaEditStage.CLEAN
+                await e.send(
+                    e.plain_result(
+                        "是否使用已配置好的正则文本清洗表达式？\n"
+                        "- /是：使用已配置\n"
+                        "- /否：自定义填写\n"
+                        "- /跳过：不使用\n"
+                        "请输入：/是 /否 /跳过"
+                    )
+                )
+                controller.keep(timeout=timeout, reset_timeout=True)
+                return
+
+            await e.send(e.plain_result("请输入：/是 /否 /跳过"))
+            controller.keep(timeout=timeout, reset_timeout=True)
+            return
+
+        if state.stage == PersonaEditStage.WRAPPER_PREFIX:
+            t = text.lstrip("/／").strip()
+            state.wrapper_prefix = "" if t == "跳过" else (e.message_str or "").strip()
+            state.stage = PersonaEditStage.WRAPPER_SUFFIX
+            await e.send(e.plain_result("请输入后置提示词（输入 /跳过 表示留空）"))
+            controller.keep(timeout=timeout, reset_timeout=True)
+            return
+
+        if state.stage == PersonaEditStage.WRAPPER_SUFFIX:
+            t = text.lstrip("/／").strip()
+            state.wrapper_suffix = "" if t == "跳过" else (e.message_str or "").strip()
+            state.stage = PersonaEditStage.CLEAN
+            await e.send(
+                e.plain_result(
+                    "是否使用已配置好的正则文本清洗表达式？\n"
+                    "- /是：使用已配置\n"
+                    "- /否：自定义填写\n"
+                    "- /跳过：不使用\n"
+                    "请输入：/是 /否 /跳过"
+                )
+            )
+            controller.keep(timeout=timeout, reset_timeout=True)
+            return
+
+        if state.stage == PersonaEditStage.CLEAN:
+            t = text.lstrip("/／").strip().lower()
+
+            if t in {"是", "y", "yes", "1", "开启", "开", "使用"}:
+                state.clean_use_config = True
+                state.clean_regex = ""
+                state.stage = PersonaEditStage.CONTENT
+                await e.send(e.plain_result("请输入角色设定"))
+                controller.keep(timeout=timeout, reset_timeout=True)
+                return
+
+            if t in {"否", "n", "no", "0", "自定义", "custom"}:
+                state.clean_use_config = False
+                state.stage = PersonaEditStage.CLEAN_REGEX
+                await e.send(
+                    e.plain_result(
+                        "请输入正则表达式（用于清洗注入的角色内容：re.sub(pattern, '', text)）。\n"
+                        "输入 /跳过 表示不设置。"
+                    )
+                )
+                controller.keep(timeout=timeout, reset_timeout=True)
+                return
+
+            if t in {"跳过", "skip"}:
+                state.clean_use_config = False
+                state.clean_regex = ""
+                state.stage = PersonaEditStage.CONTENT
+                await e.send(e.plain_result("请输入角色设定"))
+                controller.keep(timeout=timeout, reset_timeout=True)
+                return
+
+            await e.send(e.plain_result("请输入：/是 /否 /跳过"))
+            controller.keep(timeout=timeout, reset_timeout=True)
+            return
+
+        if state.stage == PersonaEditStage.CLEAN_REGEX:
+            t = text.lstrip("/／").strip()
+            if t in {"跳过", "skip"}:
+                state.clean_regex = ""
+                state.stage = PersonaEditStage.CONTENT
+                await e.send(e.plain_result("请输入角色设定"))
+                controller.keep(timeout=timeout, reset_timeout=True)
+                return
+
+            pattern = (e.message_str or "").strip()
+            if not pattern:
+                await e.send(e.plain_result("请输入正则表达式，或 /跳过。"))
+                controller.keep(timeout=timeout, reset_timeout=True)
+                return
+
+            try:
+                re.compile(pattern)
+            except Exception:
+                await e.send(e.plain_result("正则表达式无效，请重新输入，或 /跳过。"))
+                controller.keep(timeout=timeout, reset_timeout=True)
+                return
+
+            state.clean_regex = pattern
             state.stage = PersonaEditStage.CONTENT
             await e.send(e.plain_result("请输入角色设定"))
             controller.keep(timeout=timeout, reset_timeout=True)

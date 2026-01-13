@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from astrbot.api.event import AstrMessageEvent
 from astrbot.core.provider.entities import ProviderRequest
 
@@ -105,12 +107,32 @@ async def inject_persona(self, event: AstrMessageEvent, req: ProviderRequest):
     if not persona or not persona.content.strip():
         return
 
-    prefix = self._cfg.default_prefix
-    suffix = self._cfg.default_suffix
+    # 1) 先对“角色内容”做可选正则清洗（不清洗前后置提示词）
+    base_text = persona.content
+    clean_pattern = ""
+    if bool(getattr(persona, "clean_use_config", False)):
+        clean_pattern = (getattr(self._cfg, "default_clean_regex", "") or "").strip()
+    else:
+        clean_pattern = (getattr(persona, "clean_regex", "") or "").strip()
 
-    injected = persona.content
+    if clean_pattern:
+        try:
+            base_text = re.sub(clean_pattern, "", base_text)
+        except Exception:
+            # 正则错误不阻断注入，直接按原文注入
+            base_text = persona.content
+
+    # 2) 再根据“前后置提示词”配置进行包装
+    injected = base_text
     if persona.use_wrapper:
-        injected = f"{prefix}{persona.content}{suffix}"
+        use_cfg_wrapper = bool(getattr(persona, "wrapper_use_config", True))
+        if use_cfg_wrapper:
+            prefix = self._cfg.default_prefix
+            suffix = self._cfg.default_suffix
+        else:
+            prefix = getattr(persona, "wrapper_prefix", "") or ""
+            suffix = getattr(persona, "wrapper_suffix", "") or ""
+        injected = f"{prefix}{base_text}{suffix}"
 
     if not injected.strip():
         return

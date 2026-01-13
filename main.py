@@ -34,7 +34,7 @@ from .src import pm_commands_cozynook as _pm_commands_cozynook
 
 
 class Main(Star):
-    """角色管理（会话添加/列表转发/注入前后缀 + CozyNook 角色小屋）"""
+    """角色管理（会话添加/列表转发/注入前后缀/正则清洗 + CozyNook 角色小屋）"""
 
     def __init__(self, context: Context, config: dict | None = None):
         super().__init__(context)
@@ -727,7 +727,7 @@ class Main(Star):
 
     @filter.command("创建角色")
     async def add_persona(self, event: AstrMessageEvent, 名称: GreedyStr):
-        """平台消息下发时：创建角色（会话式引导输入简介/标签/设定）。"""
+        """平台消息下发时：创建角色（会话式引导输入简介/标签/前后置/清洗/设定）。"""
         async for r in _pm_commands_basic.add_persona(self, event, 名称):
             yield r
 
@@ -753,7 +753,7 @@ class Main(Star):
 
     @filter.command("导入角色")
     async def cozynook_import_role(self, event: AstrMessageEvent, 密码或ULA: GreedyStr):
-        """平台消息下发时：从 CozyNook 导入为本地角色。"""
+        """平台消息下发时：从 CozyNook 导入为本地角色（含前后置/清洗选项）。"""
         # 显式导入命令：跳过“/导入 /导出”选择
         async for r in _pm_commands_cozynook.cozynook_get(
             self,

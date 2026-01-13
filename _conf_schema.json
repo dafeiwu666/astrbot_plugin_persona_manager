@@ -34,6 +34,12 @@
     "default": "",
     "description": "默认后置提示词（注入格式：前置+当前角色+后置）"
   },
+  "default_clean_regex": {
+    "type": "text",
+    "default": "",
+    "description": "默认正则文本清洗表达式",
+    "hint": "在注入角色内容前，对角色内容执行 re.sub(pattern, '', text)。留空表示不启用清洗。"
+  },
   "session_timeout_sec": {
     "type": "int",
     "default": 300,

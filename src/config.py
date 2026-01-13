@@ -18,6 +18,9 @@ class PersonaPluginConfig(BaseModel):
     default_prefix: str = ""
     default_suffix: str = ""
 
+    # 注入文本清洗：默认正则（用于 re.sub(pattern, "", text)）
+    default_clean_regex: str = ""
+
     session_timeout_sec: int = 300
 
     external_persona_id: str = ""
