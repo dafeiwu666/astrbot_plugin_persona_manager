@@ -819,4 +819,4 @@ class Main(Star):
         async for r in _pm_commands_basic.edit_persona(self, event, 名称):
             yield r
 
-    # 审核/公开市场相关命令已移除：仅保留“人设（原私密人设）”与 CozyNook 角色小屋能力。
+    # 审核/市场相关命令已移除：仅保留“人设”与 CozyNook 角色小屋能力。

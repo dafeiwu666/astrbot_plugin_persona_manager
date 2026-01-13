@@ -11,13 +11,10 @@ EMPTY_PERSONA_NAME = "__empty__"
 
 class Visibility(str, Enum):
     PRIVATE = "private"
-    PENDING = "pending"
-    PUBLIC = "public"
 
 
 class Scope(str, Enum):
     USER = "user"
-    PUBLIC = "public"
 
 
 class CurrentSelection(BaseModel):
@@ -26,7 +23,7 @@ class CurrentSelection(BaseModel):
     scope: Scope
     name: str
     # 当 scope=USER 且该选择用于群聊上下文时，记录“该人设属于哪个用户”，
-    # 以便群聊按 group_id 存储选择、但仍能解析到创建者的私密人设内容。
+    # 以便群聊按 group_id 存储选择、但仍能解析到创建者的用户角色内容。
     owner_user_id: str = ""
     ts: int = 0
 
@@ -77,111 +74,6 @@ class UserBucket(BaseModel):
     current: CurrentSelection | None = None
 
 
-class PublicPersona(BaseModel):
-    model_config = ConfigDict(extra="allow")
-
-    intro: str = ""
-    content: str = ""
-    owner_user_id: str = ""
-    owner_name: str = ""
-    use_wrapper: bool = True
-    approved_at: int = 0
-    tags: list[str] = Field(default_factory=list)
-
-
-class ReviewStatus(str, Enum):
-    PENDING = "pending"
-    APPROVED = "approved"
-    REJECTED = "rejected"
-
-
-class ReviewRequest(BaseModel):
-    model_config = ConfigDict(extra="allow")
-
-    user_id: str
-    user_name: str
-    persona_name: str
-    submitted_at: int
-
-    target_type: str
-    target_id: str
-    platform_id: str
-    
-    # 原始会话上下文，用于将审核结果返回到申请人原始位置
-    # 格式："group_{group_id}" 或 "private_{user_id}"
-    original_context: str = ""
-
-    status: ReviewStatus = ReviewStatus.PENDING
-    reason: str = ""
-
-    approved_at: int | None = None
-    rejected_at: int | None = None
-
-    @field_validator("status", mode="before")
-    @classmethod
-    def _coerce_status(cls, v: Any) -> ReviewStatus:
-        try:
-            return ReviewStatus(str(v))
-        except Exception:
-            return ReviewStatus.PENDING
-
-
-class DeletionType(str, Enum):
-    FORCE_DELETE = "force_delete"
-    UNPUBLISH = "unpublish"
-
-
-class PendingDeletion(BaseModel):
-    """待确认的删除操作。"""
-    model_config = ConfigDict(extra="allow")
-
-    deletion_id: str  # 随机生成的ID
-    deletion_type: DeletionType  # 强制删除或撤下
-    persona_name: str
-    initiator_user_id: str  # 发起操作的用户ID
-    initiator_name: str  # 发起操作的用户名称
-    reason: str = ""  # 操作理由
-    created_at: int
-    expires_at: int  # 过期时间
-
-    target_type: str
-    target_id: str
-    platform_id: str
-
-    # 发起时的平台/原始上下文：用于把审核结果回传给发起者
-    # original_context 格式："group_{group_id}" 或 "private_{user_id}"
-    initiator_platform_id: str = ""
-    original_context: str = ""
-
-    @field_validator("deletion_type", mode="before")
-    @classmethod
-    def _coerce_deletion_type(cls, v: Any) -> DeletionType:
-        # 如果已经是 DeletionType 枚举对象，直接返回
-        if isinstance(v, DeletionType):
-            return v
-
-        # 兼容旧数据/异常序列化值：
-        # - "UNPUBLISH" / "FORCE_DELETE"（枚举名）
-        # - "DeletionType.UNPUBLISH"（枚举对象被 str() 后的形式）
-        # - 中文值（如"撤下"/"强制删除"）
-        raw = "" if v is None else str(v)
-        s = raw.strip()
-        if not s:
-            return DeletionType.FORCE_DELETE
-
-        sl = s.lower()
-        if "unpublish" in sl or "撤下" in s:
-            return DeletionType.UNPUBLISH
-        if "force_delete" in sl or "强制删除" in s:
-            return DeletionType.FORCE_DELETE
-
-        # 标准值："unpublish" / "force_delete"
-        try:
-            return DeletionType(sl)
-        except Exception:
-            return DeletionType.FORCE_DELETE
-
-
 class Store(BaseModel):
     """插件持久化数据。
 
@@ -192,12 +84,8 @@ class Store(BaseModel):
 
     version: int = 1
     users: dict[str, UserBucket] = Field(default_factory=dict)
-    public: dict[str, PublicPersona] = Field(default_factory=dict)
     # 群聊维度的“当前人设选择”：key=group_id
     group_current: dict[str, CurrentSelection] = Field(default_factory=dict)
-    review_requests: dict[str, ReviewRequest] = Field(default_factory=dict)
-    review_inbox_last: dict[str, str] = Field(default_factory=dict)
-    pending_deletions: dict[str, PendingDeletion] = Field(default_factory=dict)
 
     @classmethod
     def empty(cls) -> Store:

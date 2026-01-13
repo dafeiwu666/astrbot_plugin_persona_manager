@@ -7,7 +7,7 @@ from astrbot.api.message_components import Plain
 from astrbot.core.star.filter.command import GreedyStr
 from astrbot.core.utils.session_waiter import SessionController, session_waiter
 
-from .models import EMPTY_PERSONA_NAME, Scope, UserPersona, Visibility
+from .models import EMPTY_PERSONA_NAME
 from .session_state import PersonaEditStage, PersonaEditState
 from .text_utils import is_finish_edit_command, normalize_one_line, split_long_text, truncate_text
 
@@ -15,7 +15,7 @@ from .text_utils import is_finish_edit_command, normalize_one_line, split_long_t
 def _build_grouped_persona_nodes(*, user_id: str, user_name: str, grouped: dict) -> list[Comp.Node]:
     nodes: list[Comp.Node] = []
 
-    # 仅保留“人设”（原私密） - 每个人设一个独立节点
+    # 仅保留“人设” - 每个人设一个独立节点
     for name, p in grouped.get("personas", []) or grouped.get("private", []):
         intro = normalize_one_line(p.intro).strip()
         intro_display = truncate_text(intro, 30)
@@ -304,7 +304,7 @@ async def switch_persona(self, event: AstrMessageEvent, 名称: GreedyStr):
             yield event.plain_result(f"已切换角色：{name}")
         return
 
-    yield event.plain_result("未找到该角色（仅支持自己的和公开角色）。")
+    yield event.plain_result("未找到该角色（仅支持自己的角色）。")
 
 
 async def switch_to_empty_persona(self, event: AstrMessageEvent):
@@ -355,15 +355,14 @@ async def current_persona(self, event: AstrMessageEvent):
         yield event.plain_result("当前未切换任何角色（休息模式）。")
         return
 
-    scope, name = cur
+    _scope, name = cur
 
     # 如果是空人设，显示特殊提示
     if name == EMPTY_PERSONA_NAME:
         yield event.plain_result("当前角色：休息模式（未使用任何角色）")
         return
 
-    scope_cn = "自己" if scope == Scope.USER else "公开"
-    yield event.plain_result(f"当前角色：{name}（来源：{scope_cn}）")
+    yield event.plain_result(f"当前角色：{name}")
 
 
 async def view_persona(self, event: AstrMessageEvent, 名称: GreedyStr):
@@ -379,37 +378,17 @@ async def view_persona(self, event: AstrMessageEvent, 名称: GreedyStr):
 
     user_id = str(event.get_sender_id())
 
-    # 尝试从私密人设获取
     persona = await self._svc.get_user_persona(user_id=user_id, name=name)
-    persona_type = "私密"
-
-    # 如果私密人设不存在，尝试从公开人设获取
-    if not persona:
-        store = await self._svc.load_store()
-        public_persona = store.public.get(name)
-        if public_persona:
-            # 将公开人设转换为用户人设格式以统一处理
-            persona = UserPersona(
-                intro=public_persona.intro,
-                content=public_persona.content,
-                visibility=Visibility.PUBLIC,
-                use_wrapper=public_persona.use_wrapper,
-                owner_name=public_persona.owner_name,
-                updated_at=public_persona.approved_at,
-                tags=public_persona.tags,
-            )
-            persona_type = "公开"
 
     if not persona:
-        yield event.plain_result("未找到该角色（仅支持查看自己的角色和公开角色）。")
+        yield event.plain_result("未找到该角色（仅支持查看自己的角色）。")
         return
 
     # 构建人设信息：人设类型、名称、标签、完整简介
     tags_str = "、".join(persona.tags) if persona.tags else "无"
     user_name = str(event.get_sender_name())
 
-    # 基础信息
-    base_info = (f"【{persona_type}角色】{name}\n" f"标签: {tags_str}")
+    base_info = (f"【角色】{name}\n" f"标签: {tags_str}")
 
     # 简介分段处理
     intro_parts = split_long_text(persona.intro, max_chars=3000)
@@ -552,7 +531,7 @@ async def edit_persona(self, event: AstrMessageEvent, 名称: GreedyStr):
                 if success:
                     await e.send(e.plain_result(f"已更新设定：{state.name}"))
                 else:
-                    await e.send(e.plain_result("更新失败，角色可能已被公开或删除。"))
+                    await e.send(e.plain_result("更新失败，角色可能已被删除。"))
             except Exception as ex:
                 logger.error(f"更新角色失败: {ex!s}")
                 await e.send(e.plain_result("更新失败，已退出设定修改。"))
