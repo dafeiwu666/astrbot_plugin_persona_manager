@@ -1,0 +1,6 @@
+name: astrbot_plugin_persona_manager
+display_name: 角色注入
+version: 0.0.1
+author: LgCookie&etgpao&feiu
+desc: 角色注入与人设管理插件，具有强大的会话式创建/修改、标签检索、关键词触发、注入前后缀、群私聊隔离，并支持 CozyNook 社区角色小屋的浏览/导入/导出与内容分享。
+repo: https://github.com/dafeiwu666

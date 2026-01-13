@@ -1,0 +1,89 @@
+{
+  "enabled": {
+    "type": "bool",
+    "default": true,
+    "description": "是否启用角色管理插件"
+  },
+  "whitelist_user_ids": {
+    "type": "list",
+    "default": [],
+    "description": "白名单用户：列表内用户私聊无AI回复次数限制（建议填QQ号字符串）。留空表示全部用户视为白名单"
+  },
+  "whitelist_group_ids": {
+    "type": "list",
+    "default": [],
+    "description": "白名单群聊：列表内的群聊无AI回复次数限制。留空表示全部群聊视为白名单"
+  },
+  "group_llm_limit": {
+    "type": "int",
+    "default": -1,
+    "description": "群聊AI回复次数限制（每天）。-1 表示不限制，0 表示禁用"
+  },
+  "private_llm_limit": {
+    "type": "int",
+    "default": -1,
+    "description": "私聊AI回复次数限制（每天）。-1 表示不限制，0 表示禁用"
+  },
+  "default_prefix": {
+    "type": "text",
+    "default": "",
+    "description": "默认前置提示词（注入格式：前置+当前角色+后置）"
+  },
+  "default_suffix": {
+    "type": "text",
+    "default": "",
+    "description": "默认后置提示词（注入格式：前置+当前角色+后置）"
+  },
+  "session_timeout_sec": {
+    "type": "int",
+    "default": 300,
+    "description": "会话式添加/编辑超时（秒）"
+  },
+  "cozynook_sid_cookie": {
+    "type": "text",
+    "default": "",
+    "description": "Cozyverse 登录态 Cookie",
+    "hint": "用于访问 v1 插件接口拉取评论等需要鉴权的内容(前往网站登录后f12查看)。可填 cv_auth=... 或 cv_sid 的值；也可填 cv_sid=xxx / sid=xxx / 任意完整 Cookie 片段，如：cv_auth=...; cv_sid=..."
+  },
+  "cozynook_comments_take": {
+    "type": "int",
+    "default": 10,
+    "description": "最新评论条数",
+    "hint": "角色小屋展示的最新评论条数（0-50，最大 50；超过会被强制压到 50）。填 0 表示不拉取评论。"
+  },
+  "external_persona_id": {
+    "type": "text",
+    "default": "",
+    "hint": "插件外统一角色ID。填写后，无论切换到哪个插件内角色，对话内都会同步切换到此外部角色（仅限对话内）",
+    "description": "统一外部角色ID"
+  },
+  "sync_nickname_on_switch": {
+    "type": "bool",
+    "default": false,
+    "description": "切换角色时是否同步修改QQ昵称/群名片（仅支持 aiocqhttp 平台）"
+  },
+  "nickname_sync_mode": {
+    "type": "text",
+    "default": "group_card",
+    "hint": "profile: 群聊和私聊都修改QQ昵称 | group_card: 群聊只修改群名片，私聊不修改 | hybrid: 群聊修改群名片，私聊修改QQ昵称",
+    "description": "昵称同步模式"
+  },
+  "nickname_template": {
+    "type": "text",
+    "default": "{persona_name}",
+    "hint": "支持 {persona_name} 占位符，例如：[Bot]{persona_name}",
+    "description": "昵称/群名片模板"
+  },
+  "auto_reset_on_switch": {
+    "type": "bool",
+    "default": false,
+    "description": "自动重置聊天记录",
+    "hint": "切换角色时自动重置聊天记录（包括切换到休息模式、角色被删除自动切回休息模式等所有角色变化情况）"
+  },
+  "keyword_persona_triggers": {
+    "type": "text",
+    "default": "",
+    "description": "关键词触发 LLM 回复（每行一条：关键词:提示词）",
+    "hint": "示例：\n你好:你是客服，请用简短礼貌的语气回答。\n~帮助:你是说明书助手，直接给出用法步骤。\n\n规则：\n- 关键词前加 ~ 表示包含匹配（大小写不敏感）\n- 不加 ~ 表示去除所有空白字符后完全匹配（大小写敏感）\n- 触发时仅注入右侧填写的提示词，不注入前后置提示词与当前角色"
+  }
+}
