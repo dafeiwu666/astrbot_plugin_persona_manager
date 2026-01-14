@@ -1152,6 +1152,15 @@ async def cozynook_draw_channel_cards(self, event: AstrMessageEvent, section_nam
     - /角色小屋 分区名：仅从该分区随机抽取
     """
 
+    def _yield_merged_text(lines: list[str]):
+        merged = "\n".join([str(x) for x in lines if str(x).strip()])
+        parts = split_long_text(merged, max_chars=3000)
+        nodes: list[Comp.Node] = []
+        uin = str(event.get_self_id())
+        for p in parts:
+            nodes.append(Comp.Node(uin=uin, name="角色小屋", content=[Plain(p)]))
+        return event.chain_result([Comp.Nodes(nodes)])
+
     err = self._require_access(event)
     if err:
         yield event.plain_result(err)
@@ -1165,9 +1174,11 @@ async def cozynook_draw_channel_cards(self, event: AstrMessageEvent, section_nam
         cookie = ""
 
     if not cookie:
-        yield event.plain_result(
-            "未配置 Cozyverse 登录态 Cookie。\n"
-            "请在插件配置里填写 `cozynook_sid_cookie`：可填 `cv_auth=...` 或 `cv_sid=...`（从浏览器 Cookie 复制）。"
+        yield _yield_merged_text(
+            [
+                "未配置 Cozyverse 登录态 Cookie。",
+                "请在插件配置里填写 cozynook_sid_cookie（可填 cv_auth=... 或 cv_sid=...）。",
+            ]
         )
         return
 
@@ -1184,11 +1195,11 @@ async def cozynook_draw_channel_cards(self, event: AstrMessageEvent, section_nam
 
     code = str(DEFAULT_CHANNEL_INVITE_CODE or "").strip().lower()
     if not _is_xb(code):
-        yield event.plain_result("角色小屋分享码配置无效（应为 xb-16位）。")
+        yield _yield_merged_text(["角色小屋分享码配置无效（应为 xb-16位）。"])
         return
 
     if not _AIOHTTP_AVAILABLE or aiohttp is None:
-        yield event.plain_result("缺少依赖 aiohttp，无法访问角色小屋接口。请安装：pip install aiohttp")
+        yield _yield_merged_text(["缺少依赖 aiohttp，无法访问角色小屋接口。", "请安装：pip install aiohttp"])
         return
 
     session = None
@@ -1205,9 +1216,9 @@ async def cozynook_draw_channel_cards(self, event: AstrMessageEvent, section_nam
         j_status, j_data = await _cozyverse_join_channel_by_invite_async(code=code, cookie=cookie, session=session)
         if not (isinstance(j_data, dict) and j_data.get("ok")):
             if int(j_status or 0) == 401:
-                yield event.plain_result("登录态已失效：已退出。请更新 `cozynook_sid_cookie` 后重试。")
+                yield _yield_merged_text(["登录态已失效：已退出。", "请更新 cozynook_sid_cookie 后重试。"])
                 return
-            yield event.plain_result("加入频道失败：已退出。")
+            yield _yield_merged_text(["加入频道失败：已退出。"])
             return
 
         try:
@@ -1215,15 +1226,15 @@ async def cozynook_draw_channel_cards(self, event: AstrMessageEvent, section_nam
         except Exception:
             channel_id = 0
         if channel_id <= 0:
-            yield event.plain_result("加入频道失败：已退出。")
+            yield _yield_merged_text(["加入频道失败：已退出。"])
             return
 
         b_status, b_data = await _cozyverse_fetch_bootstrap_async(cookie=cookie, session=session)
         if not (isinstance(b_data, dict) and b_data.get("ok")):
             if int(b_status or 0) == 401:
-                yield event.plain_result("登录态已失效：已退出。请更新 `cozynook_sid_cookie` 后重试。")
+                yield _yield_merged_text(["登录态已失效：已退出。", "请更新 cozynook_sid_cookie 后重试。"])
                 return
-            yield event.plain_result("拉取频道内容失败：已退出。")
+            yield _yield_merged_text(["拉取频道内容失败：已退出。"])
             return
 
         channels = b_data.get("channels")
@@ -1265,10 +1276,12 @@ async def cozynook_draw_channel_cards(self, event: AstrMessageEvent, section_nam
             section_id_filter = section_id_by_name.get(section_query.casefold())
             if not section_id_filter:
                 hint = " / ".join(section_name_list) if section_name_list else "(暂无分区)"
-                yield event.plain_result(
-                    "未找到该分区，已退出。\n"
-                    f"可用分区：{hint}\n"
-                    "用法：/角色小屋 分区名"
+                yield _yield_merged_text(
+                    [
+                        "未找到该分区，已退出。",
+                        f"可用分区：{hint}",
+                        "用法：/角色小屋 分区名",
+                    ]
                 )
                 return
 
@@ -1301,10 +1314,11 @@ async def cozynook_draw_channel_cards(self, event: AstrMessageEvent, section_nam
             with_pwd.append(p)
 
         if not with_pwd:
-            yield event.plain_result(
-                "频道暂无可用卡片（可能卡片未公开密码，或你没有查看权限）。\n"
-                "已退出。"
-            )
+            lines = []
+            if section_query:
+                lines.append(f"【分区】{section_query}")
+            lines.extend(["频道暂无可用卡片（可能卡片未公开密码，或你没有查看权限）。", "已退出。"])
+            yield _yield_merged_text(lines)
             return
 
         want = min(int(pick_n), len(with_pwd))
@@ -1331,7 +1345,7 @@ async def cozynook_draw_channel_cards(self, event: AstrMessageEvent, section_nam
 
         lines.append("\n可用指令：/获取卡片 ula-xxxx（查看帖子） /导入角色 ula-xxxx（导入）")
 
-        yield event.plain_result("\n".join(lines))
+        yield _yield_merged_text(lines)
     finally:
         if close_session and session is not None:
             try:
