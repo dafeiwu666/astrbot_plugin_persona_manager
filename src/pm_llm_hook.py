@@ -8,6 +8,13 @@ from astrbot.core.provider.entities import ProviderRequest
 from .models import EMPTY_PERSONA_NAME
 
 
+def _safe_delattr(obj: object, name: str) -> None:
+    try:
+        delattr(obj, name)
+    except Exception:
+        return
+
+
 async def inject_persona(self, event: AstrMessageEvent, req: ProviderRequest):
     # 逻辑从 main.Main.inject_persona 原样抽取；Main 仍保留装饰器入口。
     if not self._enabled():
@@ -53,10 +60,7 @@ async def inject_persona(self, event: AstrMessageEvent, req: ProviderRequest):
     # 检查次数限制
     quota_already_counted = bool(getattr(event, "_pm_quota_counted", False))
     if quota_already_counted:
-        try:
-            delattr(event, "_pm_quota_counted")
-        except Exception:
-            pass
+        _safe_delattr(event, "_pm_quota_counted")
 
     allowed, deny_msg = await self._check_and_maybe_increment_llm_usage(
         event,
@@ -77,11 +81,8 @@ async def inject_persona(self, event: AstrMessageEvent, req: ProviderRequest):
         req.system_prompt = (req.system_prompt or "") + injected
 
         # 清理一次性标记，避免影响后续请求
-        try:
-            delattr(event, "_pm_keyword_persona_content")
-            delattr(event, "_pm_keyword_matched")
-        except Exception:
-            pass
+        _safe_delattr(event, "_pm_keyword_persona_content")
+        _safe_delattr(event, "_pm_keyword_matched")
         return
 
     result = await self._svc.resolve_persona_for_inject_for_context(

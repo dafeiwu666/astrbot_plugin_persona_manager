@@ -978,16 +978,17 @@ async def cozynook_get(self, event: AstrMessageEvent, arg, *, allow_import: bool
             title=title,
             author=author,
             intro=intro,
-            content=content,
-            files=files,
-            cookie=cookie,
-            base_url=COZYNOOK_SITE_URL,
-        ):
-            yield r
-        return
-    if mode_norm in {"export", "导出"}:
-        async for r in _handle_export_flow(
-            self,
+                preview = await asyncio.to_thread(
+                    _render_post_preview_image,
+                    title=title,
+                    author=author,
+                    date_str=date_str,
+                    intro=intro,
+                    content=content,
+                    files=files,
+                    pwd=pwd,
+                    font_path_preferred=preferred_font,
+                )
             event,
             pwd=pwd,
             title=title,

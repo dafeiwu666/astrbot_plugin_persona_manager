@@ -177,7 +177,8 @@ class Main(Star):
             sender_id = self._safe_str(event.get_sender_id())
             self_id = self._safe_str(event.get_self_id())
             return bool(sender_id and self_id and sender_id == self_id)
-        except Exception:
+        except Exception as ex:
+            logger.debug(f"角色社区化人设管理 _is_self_message_event 异常：{ex!r}")
             return False
 
     def _is_empty_echo_event(self, event: AstrMessageEvent) -> bool:
@@ -196,7 +197,8 @@ class Main(Star):
             except Exception:
                 msgs = []
             return len(msgs) == 0
-        except Exception:
+        except Exception as ex:
+            logger.debug(f"角色社区化人设管理 _is_empty_echo_event 异常：{ex!r}")
             return False
 
     @staticmethod
