@@ -10,6 +10,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+try:
+    import aiohttp  # type: ignore
+
+    _AIOHTTP_AVAILABLE = True
+except Exception:  # pragma: no cover
+    aiohttp = None  # type: ignore[assignment]
+    _AIOHTTP_AVAILABLE = False
+
 import astrbot.api.message_components as Comp
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent
@@ -65,10 +73,8 @@ async def _http_get_json_with_status_async(
 ) -> tuple[int, dict[str, Any]]:
     """异步获取 JSON（依赖 aiohttp）。"""
 
-    try:
-        import aiohttp  # type: ignore
-    except Exception as ex:
-        logger.error(f"角色小屋：缺少 aiohttp，无法请求接口：{ex!s}")
+    if not _AIOHTTP_AVAILABLE or aiohttp is None:
+        logger.error("角色小屋：缺少 aiohttp，无法请求接口")
         return 0, {}
 
     headers = {"User-Agent": _get_user_agent()}
@@ -114,10 +120,8 @@ async def _download_to_file_async(
 ) -> Path:
     """异步下载文件（依赖 aiohttp），流式写盘避免 OOM。"""
 
-    try:
-        import aiohttp  # type: ignore
-    except Exception as ex:
-        raise RuntimeError(f"缺少 aiohttp，无法下载文件：{ex!s}")
+    if not _AIOHTTP_AVAILABLE or aiohttp is None:
+        raise RuntimeError("缺少 aiohttp，无法下载文件")
 
     dest.parent.mkdir(parents=True, exist_ok=True)
     final_url = _resolve_url(url, base=base_url or COZYNOOK_SITE_URL)
@@ -725,12 +729,22 @@ async def cozynook_get(self, event: AstrMessageEvent, arg, *, allow_import: bool
         )
         return
 
+    # 评论展示条数可配置（0-50）；默认 10。
+    try:
+        take = int(getattr(self._cfg, "cozynook_comments_take", 10) or 0)
+    except Exception:
+        take = 10
+    if take < 0:
+        take = 0
+    if take > 50:
+        take = 50
+
+    post_id = 0
+    comments: list[str] = []
+
     try:
         # 复用同一个 aiohttp session：获取帖子 + 拉评论共享连接池
-        try:
-            import aiohttp  # type: ignore
-        except Exception as ex:
-            logger.error(f"角色小屋：缺少 aiohttp，无法访问接口：{ex!s}")
+        if not _AIOHTTP_AVAILABLE or aiohttp is None:
             yield event.plain_result("缺少依赖 aiohttp，无法访问角色小屋接口。请安装：pip install aiohttp")
             return
 
@@ -740,6 +754,23 @@ async def cozynook_get(self, event: AstrMessageEvent, arg, *, allow_import: bool
             headers["Cookie"] = cookie
         async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
             status, post = await _cozyverse_fetch_post_by_password_async(pwd=pwd, cookie=cookie, session=session)
+
+            # 拉取评论需要复用连接池，因此必须在 session 生命周期内完成。
+            if isinstance(post, dict):
+                try:
+                    post_id = int(post.get("id") or 0)
+                except Exception:
+                    post_id = 0
+                if post_id > 0 and take > 0:
+                    try:
+                        _c_status, comments = await _cozyverse_fetch_latest_comments_v1_async(
+                            post_id=post_id,
+                            cookie=cookie,
+                            take=take,
+                            session=session,
+                        )
+                    except Exception:
+                        comments = []
     except Exception as ex:
         logger.error(f"Cozyverse 拉取失败: {ex!s}")
         yield event.plain_result("Cozyverse 拉取失败，请稍后重试。")
@@ -752,11 +783,6 @@ async def cozynook_get(self, event: AstrMessageEvent, arg, *, allow_import: bool
             yield event.plain_result("未获取到帖子内容（接口返回异常）。")
         return
 
-    post_id = 0
-    try:
-        post_id = int(post.get("id") or 0)
-    except Exception:
-        post_id = 0
     title = str(post.get("title") or "").strip()
     author = str(post.get("authorName") or "").strip()
     intro = str(post.get("intro") or "").strip()
@@ -773,28 +799,7 @@ async def cozynook_get(self, event: AstrMessageEvent, arg, *, allow_import: bool
     if not date_str:
         date_str = time.strftime("%Y-%m-%d", time.localtime())
 
-    # 获取帖子时不再渲染图片：只发送“合并转发聊天记录”文本（含附件名与最新评论）。
-    # 评论展示条数可配置（0-50）；默认 10。
-    try:
-        take = int(getattr(self._cfg, "cozynook_comments_take", 10) or 0)
-    except Exception:
-        take = 10
-    if take < 0:
-        take = 0
-    if take > 50:
-        take = 50
-
-    comments: list[str] = []
-        if post_id > 0 and take > 0:
-            try:
-                _c_status, comments = await _cozyverse_fetch_latest_comments_v1_async(
-                    post_id=post_id,
-                    cookie=cookie,
-                    take=take,
-                    session=session,
-                )
-            except Exception:
-                comments = []
+    # 获取帖子时：优先发送“合并转发聊天记录”文本（含附件名与最新评论）。
     use_preview = bool(getattr(self._cfg, "cozynook_use_preview_image", False))
     if use_preview:
         try:
@@ -1396,9 +1401,7 @@ async def _build_import_content_from_files(self, files: list[CozyPostFile], *, c
     base_dir.mkdir(parents=True, exist_ok=True)
     _prune_cache_dir(base_dir)
 
-    try:
-        import aiohttp  # type: ignore
-    except Exception:
+    if not _AIOHTTP_AVAILABLE or aiohttp is None:
         # 没有 aiohttp 时导入附件文本直接跳过
         return ""
 
@@ -1427,22 +1430,25 @@ async def _build_import_content_from_files(self, files: list[CozyPostFile], *, c
             except Exception:
                 continue
 
-        try:
-            raw = local.read_bytes()
-            if (not allow_by_ext) and len(raw) > _MAX_IMPORT_TEXT_FILE_BYTES:
+            try:
+                raw = local.read_bytes()
+                if (not allow_by_ext) and len(raw) > _MAX_IMPORT_TEXT_FILE_BYTES:
+                    continue
+                text = _decode_probably_text(raw)
+                if text is None:
+                    continue
+                text = text.strip()
+                if not text:
+                    continue
+                parts.append(f"[{f.name}]\n{text}")
+            except Exception:
                 continue
-            text = _decode_probably_text(raw)
-            if text is None:
-                continue
-            text = text.strip()
-            if not text:
-                continue
-            parts.append(f"[{f.name}]\n{text}")
-
-            # 导入仅用于提取文本：读取成功后尽快删除文件
-            _schedule_delete(Path(local), delay_sec=60)
-        except Exception:
-            continue
+            finally:
+                # 导入仅用于提取文本：读完立即清理，避免残留
+                try:
+                    Path(local).unlink(missing_ok=True)
+                except Exception:
+                    pass
 
     return "\n\n".join([p for p in parts if p.strip()])
 
@@ -1452,13 +1458,8 @@ async def _send_files(self, event: AstrMessageEvent, files: list[CozyPostFile], 
     base_dir.mkdir(parents=True, exist_ok=True)
     _prune_cache_dir(base_dir)
 
-    try:
-        import aiohttp  # type: ignore
-    except Exception:
-        aiohttp = None
-
     session = None
-    if aiohttp is not None:
+    if _AIOHTTP_AVAILABLE and aiohttp is not None:
         timeout = aiohttp.ClientTimeout(total=max(int(getattr(self._cfg, "cozynook_timeout_sec", 30) or 30), 1))
         headers = {"User-Agent": _get_user_agent()}
         if cookie:

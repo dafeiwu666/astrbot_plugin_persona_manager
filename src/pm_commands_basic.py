@@ -48,6 +48,276 @@ def _is_allowed_session_command_token(token: str) -> bool:
     }
 
 
+async def _advance_add_persona_session(
+    self,
+    controller: SessionController,
+    e: AstrMessageEvent,
+    *,
+    state: PersonaEditState,
+    timeout: int,
+    text: str,
+) -> None:
+    async def _ask_clean() -> None:
+        await e.send(
+            e.plain_result(
+                "是否使用已配置好的正则文本清洗表达式？\n"
+                "- /是：使用已配置\n"
+                "- /否：自定义填写\n"
+                "- /跳过：不使用\n"
+                "请输入：/是 /否 /跳过"
+            )
+        )
+
+    async def _handle_intro() -> None:
+        state.intro = text
+        state.stage = PersonaEditStage.TAGS
+        await e.send(e.plain_result("请输入标签（多个标签用空格分隔，如：大世界 纯爱），如果不需要标签请输入 /跳过"))
+        controller.keep(timeout=timeout, reset_timeout=True)
+
+    async def _handle_tags() -> None:
+        t = text.lstrip("/／").strip()
+        if t == "跳过":
+            state.tags = []
+        else:
+            state.tags = [x.strip() for x in text.split() if x.strip()]
+        state.stage = PersonaEditStage.WRAPPER
+        await e.send(
+            e.plain_result(
+                "是否使用已配置好的前后置提示词？\n"
+                "- /是：使用已配置\n"
+                "- /否：自定义填写\n"
+                "- /跳过：不使用\n"
+                "请输入：/是 /否 /跳过"
+            )
+        )
+        controller.keep(timeout=timeout, reset_timeout=True)
+
+    async def _handle_wrapper() -> None:
+        t = text.lstrip("/／").strip().lower()
+        if t in {"是", "y", "yes", "1", "开启", "开", "使用"}:
+            state.use_wrapper = True
+            state.wrapper_use_config = True
+            state.stage = PersonaEditStage.CLEAN
+            await _ask_clean()
+            controller.keep(timeout=timeout, reset_timeout=True)
+            return
+        if t in {"否", "n", "no", "0", "自定义", "custom"}:
+            state.use_wrapper = True
+            state.wrapper_use_config = False
+            state.stage = PersonaEditStage.WRAPPER_PREFIX
+            await e.send(e.plain_result("请输入前置提示词（输入 /跳过 表示留空）"))
+            controller.keep(timeout=timeout, reset_timeout=True)
+            return
+        if t in {"跳过", "skip"}:
+            state.use_wrapper = False
+            state.stage = PersonaEditStage.CLEAN
+            await _ask_clean()
+            controller.keep(timeout=timeout, reset_timeout=True)
+            return
+        await e.send(e.plain_result("请输入：/是 /否 /跳过"))
+        controller.keep(timeout=timeout, reset_timeout=True)
+
+    async def _handle_wrapper_prefix() -> None:
+        t = text.lstrip("/／").strip()
+        state.wrapper_prefix = "" if t == "跳过" else (getattr(e, "message_str", "") or "").strip()
+        state.stage = PersonaEditStage.WRAPPER_SUFFIX
+        await e.send(e.plain_result("请输入后置提示词（输入 /跳过 表示留空）"))
+        controller.keep(timeout=timeout, reset_timeout=True)
+
+    async def _handle_wrapper_suffix() -> None:
+        t = text.lstrip("/／").strip()
+        state.wrapper_suffix = "" if t == "跳过" else (getattr(e, "message_str", "") or "").strip()
+        state.stage = PersonaEditStage.CLEAN
+        await _ask_clean()
+        controller.keep(timeout=timeout, reset_timeout=True)
+
+    async def _handle_clean() -> None:
+        t = text.lstrip("/／").strip().lower()
+        if t in {"是", "y", "yes", "1", "开启", "开", "使用"}:
+            state.clean_use_config = True
+            state.clean_regex = ""
+            state.stage = PersonaEditStage.CONTENT
+            await e.send(e.plain_result("请输入角色设定"))
+            controller.keep(timeout=timeout, reset_timeout=True)
+            return
+        if t in {"否", "n", "no", "0", "自定义", "custom"}:
+            state.clean_use_config = False
+            state.stage = PersonaEditStage.CLEAN_REGEX
+            await e.send(
+                e.plain_result(
+                    "请输入正则表达式（用于清洗注入的角色内容：re.sub(pattern, '', text)）。\n"
+                    "输入 /跳过 表示不设置。"
+                )
+            )
+            controller.keep(timeout=timeout, reset_timeout=True)
+            return
+        if t in {"跳过", "skip"}:
+            state.clean_use_config = False
+            state.clean_regex = ""
+            state.stage = PersonaEditStage.CONTENT
+            await e.send(e.plain_result("请输入角色设定"))
+            controller.keep(timeout=timeout, reset_timeout=True)
+            return
+        await e.send(e.plain_result("请输入：/是 /否 /跳过"))
+        controller.keep(timeout=timeout, reset_timeout=True)
+
+    async def _handle_clean_regex() -> None:
+        t = text.lstrip("/／").strip()
+        if t in {"跳过", "skip"}:
+            state.clean_regex = ""
+            state.stage = PersonaEditStage.CONTENT
+            await e.send(e.plain_result("请输入角色设定"))
+            controller.keep(timeout=timeout, reset_timeout=True)
+            return
+
+        pattern = (getattr(e, "message_str", "") or "").strip()
+        if not pattern:
+            await e.send(e.plain_result("请输入正则表达式，或 /跳过。"))
+            controller.keep(timeout=timeout, reset_timeout=True)
+            return
+        try:
+            re.compile(pattern)
+        except Exception:
+            await e.send(e.plain_result("正则表达式无效，请重新输入，或 /跳过。"))
+            controller.keep(timeout=timeout, reset_timeout=True)
+            return
+        state.clean_regex = pattern
+        state.stage = PersonaEditStage.CONTENT
+        await e.send(e.plain_result("请输入角色设定"))
+        controller.keep(timeout=timeout, reset_timeout=True)
+
+    async def _handle_content() -> None:
+        if not text:
+            await e.send(e.plain_result("请输入角色设定"))
+            controller.keep(timeout=timeout, reset_timeout=True)
+            return
+        state.add_part(text)
+        state.stage = PersonaEditStage.CONTINUE
+        await e.send(e.plain_result("是否继续，继续则输入内容，结束输入/结束角色编辑"))
+        controller.keep(timeout=timeout, reset_timeout=True)
+
+    async def _handle_continue() -> None:
+        state.add_part(text)
+        await e.send(e.plain_result("是否继续，继续则输入内容，结束输入/结束角色编辑"))
+        controller.keep(timeout=timeout, reset_timeout=True)
+
+    stage_handlers = {
+        PersonaEditStage.INTRO: _handle_intro,
+        PersonaEditStage.TAGS: _handle_tags,
+        PersonaEditStage.WRAPPER: _handle_wrapper,
+        PersonaEditStage.WRAPPER_PREFIX: _handle_wrapper_prefix,
+        PersonaEditStage.WRAPPER_SUFFIX: _handle_wrapper_suffix,
+        PersonaEditStage.CLEAN: _handle_clean,
+        PersonaEditStage.CLEAN_REGEX: _handle_clean_regex,
+        PersonaEditStage.CONTENT: _handle_content,
+        PersonaEditStage.CONTINUE: _handle_continue,
+    }
+    handler = stage_handlers.get(state.stage, _handle_continue)
+    await handler()
+
+
+async def _advance_edit_persona_session(
+    self,
+    controller: SessionController,
+    e: AstrMessageEvent,
+    *,
+    state: PersonaEditState,
+    timeout: int,
+    text: str,
+) -> None:
+    text_cmd = (text or "").lstrip("/／").strip()
+
+    async def _handle_intro() -> None:
+        if text_cmd == "保持":
+            pass
+        else:
+            state.intro = text
+        state.stage = PersonaEditStage.TAGS
+        current_tags = " ".join(state.tags) if state.tags else "无"
+        await e.send(
+            e.plain_result(
+                f"当前标签：{current_tags}\n"
+                "请输入新的标签（多个标签用空格分隔），输入 /保持 则不修改，输入 /清空 则清空所有标签"
+            )
+        )
+        controller.keep(timeout=timeout, reset_timeout=True)
+
+    async def _handle_tags() -> None:
+        if text_cmd == "保持":
+            pass
+        elif text_cmd == "清空":
+            state.tags = []
+        else:
+            state.tags = [t.strip() for t in text.split() if t.strip()]
+        state.stage = PersonaEditStage.WRAPPER
+        current = "是" if bool(state.use_wrapper) else "否"
+        await e.send(
+            e.plain_result(
+                f"当前是否使用前后置破限提示词：{current}\n"
+                "是否使用已编辑好的前后置破限提示词？\n"
+                "- /是：使用\n"
+                "- /否：不使用\n"
+                "请输入：/是 或 /否（输入 /保持 则不修改）"
+            )
+        )
+        controller.keep(timeout=timeout, reset_timeout=True)
+
+    async def _handle_wrapper() -> None:
+        t = text_cmd.lower()
+        if t == "保持":
+            pass
+        elif t in {"是", "y", "yes", "1", "开启", "开", "使用"}:
+            state.use_wrapper = True
+        elif t in {"否", "n", "no", "0", "关闭", "关", "不使用"}:
+            state.use_wrapper = False
+        else:
+            await e.send(e.plain_result("请输入：/是 或 /否（输入 /保持 则不修改）"))
+            controller.keep(timeout=timeout, reset_timeout=True)
+            return
+        state.stage = PersonaEditStage.CONTENT
+        current_content = "\n".join(state.parts) if state.parts else ""
+        preview = current_content[:200] + ("..." if len(current_content) > 200 else "")
+        await e.send(
+            e.plain_result(
+                f"当前角色设定预览：\n{preview}\n\n"
+                "请输入新的角色设定（直接输入覆盖，输入 /保持 则不修改）"
+            )
+        )
+        controller.keep(timeout=timeout, reset_timeout=True)
+
+    async def _handle_content() -> None:
+        if text_cmd == "保持":
+            state.stage = PersonaEditStage.CONTINUE
+            await e.send(
+                e.plain_result(
+                    "内容保持不变。\n"
+                    "是否继续编辑，继续则输入内容，结束输入 /结束角色编辑"
+                )
+            )
+        else:
+            state.parts = []
+            if text:
+                state.add_part(text)
+            state.stage = PersonaEditStage.CONTINUE
+            await e.send(e.plain_result("是否继续，继续则输入内容，结束输入 /结束角色编辑"))
+        controller.keep(timeout=timeout, reset_timeout=True)
+
+    async def _handle_continue() -> None:
+        state.add_part(text)
+        await e.send(e.plain_result("是否继续，继续则输入内容，结束输入 /结束角色编辑"))
+        controller.keep(timeout=timeout, reset_timeout=True)
+
+    stage_handlers = {
+        PersonaEditStage.INTRO: _handle_intro,
+        PersonaEditStage.TAGS: _handle_tags,
+        PersonaEditStage.WRAPPER: _handle_wrapper,
+        PersonaEditStage.CONTENT: _handle_content,
+        PersonaEditStage.CONTINUE: _handle_continue,
+    }
+    handler = stage_handlers.get(state.stage, _handle_continue)
+    await handler()
+
+
 def _build_grouped_persona_nodes(*, user_id: str, user_name: str, grouped: dict) -> list[Comp.Node]:
     nodes: list[Comp.Node] = []
 
@@ -157,164 +427,7 @@ async def add_persona(self, event: AstrMessageEvent, name: GreedyStr):
                 controller.stop()
             return
 
-        async def _ask_clean() -> None:
-            await e.send(
-                e.plain_result(
-                    "是否使用已配置好的正则文本清洗表达式？\n"
-                    "- /是：使用已配置\n"
-                    "- /否：自定义填写\n"
-                    "- /跳过：不使用\n"
-                    "请输入：/是 /否 /跳过"
-                )
-            )
-
-        async def _handle_intro() -> None:
-            state.intro = text
-            state.stage = PersonaEditStage.TAGS
-            await e.send(e.plain_result("请输入标签（多个标签用空格分隔，如：大世界 纯爱），如果不需要标签请输入 /跳过"))
-            controller.keep(timeout=timeout, reset_timeout=True)
-
-        async def _handle_tags() -> None:
-            t = text.lstrip("/／").strip()
-            if t == "跳过":
-                state.tags = []
-            else:
-                state.tags = [x.strip() for x in text.split() if x.strip()]
-            state.stage = PersonaEditStage.WRAPPER
-            await e.send(
-                e.plain_result(
-                    "是否使用已配置好的前后置提示词？\n"
-                    "- /是：使用已配置\n"
-                    "- /否：自定义填写\n"
-                    "- /跳过：不使用\n"
-                    "请输入：/是 /否 /跳过"
-                )
-            )
-            controller.keep(timeout=timeout, reset_timeout=True)
-
-        async def _handle_wrapper() -> None:
-            t = text.lstrip("/／").strip().lower()
-            if t in {"是", "y", "yes", "1", "开启", "开", "使用"}:
-                state.use_wrapper = True
-                state.wrapper_use_config = True
-                state.stage = PersonaEditStage.CLEAN
-                await _ask_clean()
-                controller.keep(timeout=timeout, reset_timeout=True)
-                return
-            if t in {"否", "n", "no", "0", "自定义", "custom"}:
-                state.use_wrapper = True
-                state.wrapper_use_config = False
-                state.stage = PersonaEditStage.WRAPPER_PREFIX
-                await e.send(e.plain_result("请输入前置提示词（输入 /跳过 表示留空）"))
-                controller.keep(timeout=timeout, reset_timeout=True)
-                return
-            if t in {"跳过", "skip"}:
-                state.use_wrapper = False
-                state.stage = PersonaEditStage.CLEAN
-                await _ask_clean()
-                controller.keep(timeout=timeout, reset_timeout=True)
-                return
-            await e.send(e.plain_result("请输入：/是 /否 /跳过"))
-            controller.keep(timeout=timeout, reset_timeout=True)
-
-        async def _handle_wrapper_prefix() -> None:
-            t = text.lstrip("/／").strip()
-            state.wrapper_prefix = "" if t == "跳过" else (getattr(e, "message_str", "") or "").strip()
-            state.stage = PersonaEditStage.WRAPPER_SUFFIX
-            await e.send(e.plain_result("请输入后置提示词（输入 /跳过 表示留空）"))
-            controller.keep(timeout=timeout, reset_timeout=True)
-
-        async def _handle_wrapper_suffix() -> None:
-            t = text.lstrip("/／").strip()
-            state.wrapper_suffix = "" if t == "跳过" else (getattr(e, "message_str", "") or "").strip()
-            state.stage = PersonaEditStage.CLEAN
-            await _ask_clean()
-            controller.keep(timeout=timeout, reset_timeout=True)
-
-        async def _handle_clean() -> None:
-            t = text.lstrip("/／").strip().lower()
-            if t in {"是", "y", "yes", "1", "开启", "开", "使用"}:
-                state.clean_use_config = True
-                state.clean_regex = ""
-                state.stage = PersonaEditStage.CONTENT
-                await e.send(e.plain_result("请输入角色设定"))
-                controller.keep(timeout=timeout, reset_timeout=True)
-                return
-            if t in {"否", "n", "no", "0", "自定义", "custom"}:
-                state.clean_use_config = False
-                state.stage = PersonaEditStage.CLEAN_REGEX
-                await e.send(
-                    e.plain_result(
-                        "请输入正则表达式（用于清洗注入的角色内容：re.sub(pattern, '', text)）。\n"
-                        "输入 /跳过 表示不设置。"
-                    )
-                )
-                controller.keep(timeout=timeout, reset_timeout=True)
-                return
-            if t in {"跳过", "skip"}:
-                state.clean_use_config = False
-                state.clean_regex = ""
-                state.stage = PersonaEditStage.CONTENT
-                await e.send(e.plain_result("请输入角色设定"))
-                controller.keep(timeout=timeout, reset_timeout=True)
-                return
-            await e.send(e.plain_result("请输入：/是 /否 /跳过"))
-            controller.keep(timeout=timeout, reset_timeout=True)
-
-        async def _handle_clean_regex() -> None:
-            t = text.lstrip("/／").strip()
-            if t in {"跳过", "skip"}:
-                state.clean_regex = ""
-                state.stage = PersonaEditStage.CONTENT
-                await e.send(e.plain_result("请输入角色设定"))
-                controller.keep(timeout=timeout, reset_timeout=True)
-                return
-
-            pattern = (getattr(e, "message_str", "") or "").strip()
-            if not pattern:
-                await e.send(e.plain_result("请输入正则表达式，或 /跳过。"))
-                controller.keep(timeout=timeout, reset_timeout=True)
-                return
-            try:
-                re.compile(pattern)
-            except Exception:
-                await e.send(e.plain_result("正则表达式无效，请重新输入，或 /跳过。"))
-                controller.keep(timeout=timeout, reset_timeout=True)
-                return
-            state.clean_regex = pattern
-            state.stage = PersonaEditStage.CONTENT
-            await e.send(e.plain_result("请输入角色设定"))
-            controller.keep(timeout=timeout, reset_timeout=True)
-
-        async def _handle_content() -> None:
-            if not text:
-                await e.send(e.plain_result("请输入角色设定"))
-                controller.keep(timeout=timeout, reset_timeout=True)
-                return
-            state.add_part(text)
-            state.stage = PersonaEditStage.CONTINUE
-            await e.send(e.plain_result("是否继续，继续则输入内容，结束输入/结束角色编辑"))
-            controller.keep(timeout=timeout, reset_timeout=True)
-
-        async def _handle_continue() -> None:
-            state.add_part(text)
-            await e.send(e.plain_result("是否继续，继续则输入内容，结束输入/结束角色编辑"))
-            controller.keep(timeout=timeout, reset_timeout=True)
-
-        stage_handlers = {
-            PersonaEditStage.INTRO: _handle_intro,
-            PersonaEditStage.TAGS: _handle_tags,
-            PersonaEditStage.WRAPPER: _handle_wrapper,
-            PersonaEditStage.WRAPPER_PREFIX: _handle_wrapper_prefix,
-            PersonaEditStage.WRAPPER_SUFFIX: _handle_wrapper_suffix,
-            PersonaEditStage.CLEAN: _handle_clean,
-            PersonaEditStage.CLEAN_REGEX: _handle_clean_regex,
-            PersonaEditStage.CONTENT: _handle_content,
-            PersonaEditStage.CONTINUE: _handle_continue,
-        }
-
-        handler = stage_handlers.get(state.stage, _handle_continue)
-        await handler()
+        await _advance_add_persona_session(self, controller, e, state=state, timeout=timeout, text=text)
 
     try:
         await waiter(event)
@@ -675,7 +788,6 @@ async def edit_persona(self, event: AstrMessageEvent, name: GreedyStr):
         e.stop_event()
 
         text = (getattr(e, "message_str", "") or "").strip()
-        text_cmd = text.lstrip("/／").strip()
 
         if is_finish_edit_command(text):
             try:
@@ -699,96 +811,7 @@ async def edit_persona(self, event: AstrMessageEvent, name: GreedyStr):
                 controller.stop()
             return
 
-        async def _handle_intro() -> None:
-            if text_cmd == "保持":
-                pass
-            else:
-                state.intro = text
-            state.stage = PersonaEditStage.TAGS
-            current_tags = " ".join(state.tags) if state.tags else "无"
-            await e.send(
-                e.plain_result(
-                    f"当前标签：{current_tags}\n"
-                    "请输入新的标签（多个标签用空格分隔），输入 /保持 则不修改，输入 /清空 则清空所有标签"
-                )
-            )
-            controller.keep(timeout=timeout, reset_timeout=True)
-
-        async def _handle_tags() -> None:
-            if text_cmd == "保持":
-                pass
-            elif text_cmd == "清空":
-                state.tags = []
-            else:
-                state.tags = [t.strip() for t in text.split() if t.strip()]
-            state.stage = PersonaEditStage.WRAPPER
-            current = "是" if bool(state.use_wrapper) else "否"
-            await e.send(
-                e.plain_result(
-                    f"当前是否使用前后置破限提示词：{current}\n"
-                    "是否使用已编辑好的前后置破限提示词？\n"
-                    "- /是：使用\n"
-                    "- /否：不使用\n"
-                    "请输入：/是 或 /否（输入 /保持 则不修改）"
-                )
-            )
-            controller.keep(timeout=timeout, reset_timeout=True)
-
-        async def _handle_wrapper() -> None:
-            t = text_cmd.lower()
-            if t == "保持":
-                pass
-            elif t in {"是", "y", "yes", "1", "开启", "开", "使用"}:
-                state.use_wrapper = True
-            elif t in {"否", "n", "no", "0", "关闭", "关", "不使用"}:
-                state.use_wrapper = False
-            else:
-                await e.send(e.plain_result("请输入：/是 或 /否（输入 /保持 则不修改）"))
-                controller.keep(timeout=timeout, reset_timeout=True)
-                return
-            state.stage = PersonaEditStage.CONTENT
-            current_content = "\n".join(state.parts) if state.parts else ""
-            preview = current_content[:200] + ("..." if len(current_content) > 200 else "")
-            await e.send(
-                e.plain_result(
-                    f"当前角色设定预览：\n{preview}\n\n"
-                    "请输入新的角色设定（直接输入覆盖，输入 /保持 则不修改）"
-                )
-            )
-            controller.keep(timeout=timeout, reset_timeout=True)
-
-        async def _handle_content() -> None:
-            if text_cmd == "保持":
-                state.stage = PersonaEditStage.CONTINUE
-                await e.send(
-                    e.plain_result(
-                        "内容保持不变。\n"
-                        "是否继续编辑，继续则输入内容，结束输入 /结束角色编辑"
-                    )
-                )
-            else:
-                state.parts = []
-                if text:
-                    state.add_part(text)
-                state.stage = PersonaEditStage.CONTINUE
-                await e.send(e.plain_result("是否继续，继续则输入内容，结束输入 /结束角色编辑"))
-            controller.keep(timeout=timeout, reset_timeout=True)
-
-        async def _handle_continue() -> None:
-            state.add_part(text)
-            await e.send(e.plain_result("是否继续，继续则输入内容，结束输入 /结束角色编辑"))
-            controller.keep(timeout=timeout, reset_timeout=True)
-
-        stage_handlers = {
-            PersonaEditStage.INTRO: _handle_intro,
-            PersonaEditStage.TAGS: _handle_tags,
-            PersonaEditStage.WRAPPER: _handle_wrapper,
-            PersonaEditStage.CONTENT: _handle_content,
-            PersonaEditStage.CONTINUE: _handle_continue,
-        }
-
-        handler = stage_handlers.get(state.stage, _handle_continue)
-        await handler()
+        await _advance_edit_persona_session(self, controller, e, state=state, timeout=timeout, text=text)
 
     try:
         await waiter(event)
