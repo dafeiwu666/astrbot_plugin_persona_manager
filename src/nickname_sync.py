@@ -150,12 +150,24 @@ class NicknameSync:
         if bot is None:
             return False
 
+        def _maybe_int_id(v: object) -> object:
+            # 兼容多平台：Telegram/Discord/官Q 等可能是非纯数字字符串。
+            if isinstance(v, int):
+                return v
+            s = str(v).strip()
+            if s.isdigit():
+                try:
+                    return int(s)
+                except Exception:
+                    return s
+            return s
+
         if hasattr(bot, "call_action"):
             try:
                 await bot.call_action(
                     "set_group_card",
-                    group_id=int(group_id),
-                    user_id=int(user_id),
+                    group_id=_maybe_int_id(group_id),
+                    user_id=_maybe_int_id(user_id),
                     card=card,
                 )
                 logger.debug(f"角色社区化人设管理 已同步群名片为 {card} (群 {group_id})")

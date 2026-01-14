@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import re
 
 from astrbot.api.event import AstrMessageEvent
@@ -118,7 +119,7 @@ async def inject_persona(self, event: AstrMessageEvent, req: ProviderRequest):
 
     if clean_pattern:
         try:
-            base_text = re.sub(clean_pattern, "", base_text)
+            base_text = await asyncio.to_thread(re.sub, clean_pattern, "", base_text)
         except Exception:
             # 正则错误不阻断注入，直接按原文注入
             base_text = persona.content

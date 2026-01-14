@@ -61,6 +61,7 @@ async def _http_get_json_with_status_async(
     *,
     cookie_header: str = "",
     timeout_sec: int = 20,
+    session: "aiohttp.ClientSession | None" = None,
 ) -> tuple[int, dict[str, Any]]:
     """异步获取 JSON（依赖 aiohttp）。"""
 
@@ -75,21 +76,31 @@ async def _http_get_json_with_status_async(
         headers["Cookie"] = cookie_header
 
     timeout = aiohttp.ClientTimeout(total=max(int(timeout_sec), 1))
+    close_session = False
     try:
-        async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
-            async with session.get(_normalize_url(url)) as resp:
-                status = int(resp.status)
+        if session is None:
+            session = aiohttp.ClientSession(timeout=timeout)
+            close_session = True
+
+        async with session.get(_normalize_url(url), headers=headers) as resp:
+            status = int(resp.status)
+            try:
+                data = await resp.json(content_type=None)
+            except Exception:
+                raw = await resp.read()
                 try:
-                    data = await resp.json(content_type=None)
+                    data = json.loads(raw.decode("utf-8", errors="replace"))
                 except Exception:
-                    raw = await resp.read()
-                    try:
-                        data = json.loads(raw.decode("utf-8", errors="replace"))
-                    except Exception:
-                        data = {}
-                return status, data if isinstance(data, dict) else {}
+                    data = {}
+            return status, data if isinstance(data, dict) else {}
     except Exception:
         return 0, {}
+    finally:
+        if close_session and session is not None:
+            try:
+                await session.close()
+            except Exception:
+                pass
 
 
 async def _download_to_file_async(
@@ -99,6 +110,7 @@ async def _download_to_file_async(
     cookie_header: str = "",
     timeout_sec: int = 30,
     base_url: str | None = None,
+    session: "aiohttp.ClientSession | None" = None,
 ) -> Path:
     """异步下载文件（依赖 aiohttp），流式写盘避免 OOM。"""
 
@@ -116,17 +128,26 @@ async def _download_to_file_async(
 
     timeout = aiohttp.ClientTimeout(total=max(int(timeout_sec), 1))
     tmp = dest.with_name(dest.name + ".part")
+    close_session = False
     try:
-        async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
-            async with session.get(_normalize_url(final_url)) as resp:
-                resp.raise_for_status()
-                with tmp.open("wb") as f:
-                    async for chunk in resp.content.iter_chunked(64 * 1024):
-                        if chunk:
-                            f.write(chunk)
+        if session is None:
+            session = aiohttp.ClientSession(timeout=timeout)
+            close_session = True
+
+        async with session.get(_normalize_url(final_url), headers=headers) as resp:
+            resp.raise_for_status()
+            with tmp.open("wb") as f:
+                async for chunk in resp.content.iter_chunked(64 * 1024):
+                    if chunk:
+                        f.write(chunk)
         tmp.replace(dest)
         return dest
     finally:
+        if close_session and session is not None:
+            try:
+                await session.close()
+            except Exception:
+                pass
         try:
             tmp.unlink(missing_ok=True)
         except Exception:
@@ -604,7 +625,12 @@ def _extract_recent_comments(payload: dict[str, Any]) -> list[str]:
     return out
 
 
-async def _cozyverse_fetch_post_by_password_async(*, pwd: str, cookie: str) -> tuple[int, dict[str, Any]]:
+async def _cozyverse_fetch_post_by_password_async(
+    *,
+    pwd: str,
+    cookie: str,
+    session: "aiohttp.ClientSession | None" = None,
+) -> tuple[int, dict[str, Any]]:
     """异步版本：通过后端接口用 ULA 打开帖子，返回 (status, post)。"""
 
     if not cookie:
@@ -613,12 +639,12 @@ async def _cozyverse_fetch_post_by_password_async(*, pwd: str, cookie: str) -> t
     pwd_s = (pwd or "").strip()
 
     url = f"{COZYNOOK_API_BASE}/v1/posts/by-password?pwd={urllib.parse.quote(pwd_s)}"
-    status, data = await _http_get_json_with_status_async(url, cookie_header=cookie)
+    status, data = await _http_get_json_with_status_async(url, cookie_header=cookie, session=session)
     if isinstance(data, dict) and data.get("ok") and isinstance(data.get("post"), dict):
         return status, data.get("post") or {}
 
     url2 = f"{COZYNOOK_API_BASE}/posts/by-password?pwd={urllib.parse.quote(pwd_s)}"
-    status2, data2 = await _http_get_json_with_status_async(url2, cookie_header=cookie)
+    status2, data2 = await _http_get_json_with_status_async(url2, cookie_header=cookie, session=session)
     if not isinstance(data2, dict) or not data2.get("ok"):
         return status2 or status, {}
     post = data2.get("post")
@@ -632,6 +658,7 @@ async def _cozyverse_fetch_latest_comments_v1_async(
     post_id: int,
     cookie: str,
     take: int = 10,
+    session: "aiohttp.ClientSession | None" = None,
 ) -> tuple[int, list[str]]:
     """异步版本：拉取最新评论。"""
 
@@ -641,7 +668,7 @@ async def _cozyverse_fetch_latest_comments_v1_async(
     ps = max(1, min(int(take or 10), 50))
 
     url = f"{COZYNOOK_API_BASE}/v1/posts/{int(post_id)}/comments/cursor?page_size={ps}"
-    status, data = await _http_get_json_with_status_async(url, cookie_header=cookie)
+    status, data = await _http_get_json_with_status_async(url, cookie_header=cookie, session=session)
     if isinstance(data, dict) and data.get("ok"):
         items = data.get("items")
         if not isinstance(items, list):
@@ -650,7 +677,7 @@ async def _cozyverse_fetch_latest_comments_v1_async(
         return status, comments[: int(take)]
 
     url2 = f"{COZYNOOK_API_BASE}/v1/posts/{int(post_id)}/comments?page=1&page_size={ps}"
-    status2, data2 = await _http_get_json_with_status_async(url2, cookie_header=cookie)
+    status2, data2 = await _http_get_json_with_status_async(url2, cookie_header=cookie, session=session)
     if isinstance(data2, dict) and data2.get("ok"):
         items2 = data2.get("items")
         if not isinstance(items2, list):
@@ -699,7 +726,20 @@ async def cozynook_get(self, event: AstrMessageEvent, arg, *, allow_import: bool
         return
 
     try:
-        status, post = await _cozyverse_fetch_post_by_password_async(pwd=pwd, cookie=cookie)
+        # 复用同一个 aiohttp session：获取帖子 + 拉评论共享连接池
+        try:
+            import aiohttp  # type: ignore
+        except Exception as ex:
+            logger.error(f"角色小屋：缺少 aiohttp，无法访问接口：{ex!s}")
+            yield event.plain_result("缺少依赖 aiohttp，无法访问角色小屋接口。请安装：pip install aiohttp")
+            return
+
+        timeout = aiohttp.ClientTimeout(total=max(int(getattr(self._cfg, "cozynook_timeout_sec", 20) or 20), 1))
+        headers = {"User-Agent": _get_user_agent()}
+        if cookie:
+            headers["Cookie"] = cookie
+        async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
+            status, post = await _cozyverse_fetch_post_by_password_async(pwd=pwd, cookie=cookie, session=session)
     except Exception as ex:
         logger.error(f"Cozyverse 拉取失败: {ex!s}")
         yield event.plain_result("Cozyverse 拉取失败，请稍后重试。")
@@ -745,11 +785,16 @@ async def cozynook_get(self, event: AstrMessageEvent, arg, *, allow_import: bool
         take = 50
 
     comments: list[str] = []
-    if post_id > 0 and take > 0:
-        try:
-            _c_status, comments = await _cozyverse_fetch_latest_comments_v1_async(post_id=post_id, cookie=cookie, take=take)
-        except Exception:
-            comments = []
+        if post_id > 0 and take > 0:
+            try:
+                _c_status, comments = await _cozyverse_fetch_latest_comments_v1_async(
+                    post_id=post_id,
+                    cookie=cookie,
+                    take=take,
+                    session=session,
+                )
+            except Exception:
+                comments = []
     use_preview = bool(getattr(self._cfg, "cozynook_use_preview_image", False))
     if use_preview:
         try:
@@ -1351,23 +1396,36 @@ async def _build_import_content_from_files(self, files: list[CozyPostFile], *, c
     base_dir.mkdir(parents=True, exist_ok=True)
     _prune_cache_dir(base_dir)
 
-    for f in files:
-        # 按你的要求：导入严格只导入文字，不写入图片/链接占位
-        if f.kind == "image":
-            continue
+    try:
+        import aiohttp  # type: ignore
+    except Exception:
+        # 没有 aiohttp 时导入附件文本直接跳过
+        return ""
 
-        ext = (Path(f.name).suffix or "").lower()
-        allow_by_ext = ext in _TEXT_EXTS
+    timeout = aiohttp.ClientTimeout(total=max(int(getattr(self._cfg, "cozynook_timeout_sec", 30) or 30), 1))
+    headers = {"User-Agent": _get_user_agent()}
+    if cookie:
+        headers["Cookie"] = cookie
 
-        try:
-            local = await _download_to_file_async(
-                f.url,
-                dest=base_dir / f"{int(time.time())}_{f.index}_{f.name}",
-                cookie_header=cookie,
-                base_url=base_url,
-            )
-        except Exception:
-            continue
+    async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
+        for f in files:
+            # 按你的要求：导入严格只导入文字，不写入图片/链接占位
+            if f.kind == "image":
+                continue
+
+            ext = (Path(f.name).suffix or "").lower()
+            allow_by_ext = ext in _TEXT_EXTS
+
+            try:
+                local = await _download_to_file_async(
+                    f.url,
+                    dest=base_dir / f"{int(time.time())}_{f.index}_{f.name}",
+                    cookie_header=cookie,
+                    base_url=base_url,
+                    session=session,
+                )
+            except Exception:
+                continue
 
         try:
             raw = local.read_bytes()
@@ -1394,57 +1452,79 @@ async def _send_files(self, event: AstrMessageEvent, files: list[CozyPostFile], 
     base_dir.mkdir(parents=True, exist_ok=True)
     _prune_cache_dir(base_dir)
 
-    for f in files:
-        if f.kind == "image":
-            try:
-                ext = ".png" if f.url.startswith("data:image/") else ("." + f.name.split(".")[-1] if "." in f.name else ".png")
-                local = base_dir / f"{int(time.time())}_{f.index}_{_safe_filename(f.name)}{ext}"
-                if f.url.startswith("data:image/"):
-                    try:
-                        import base64
+    try:
+        import aiohttp  # type: ignore
+    except Exception:
+        aiohttp = None
 
-                        b64 = f.url.split(",", 1)[1]
-                        local.write_bytes(base64.b64decode(b64))
-                    except Exception:
-                        await event.send(event.plain_result(f"图片导出失败：{f.name}"))
-                        continue
+    session = None
+    if aiohttp is not None:
+        timeout = aiohttp.ClientTimeout(total=max(int(getattr(self._cfg, "cozynook_timeout_sec", 30) or 30), 1))
+        headers = {"User-Agent": _get_user_agent()}
+        if cookie:
+            headers["Cookie"] = cookie
+        session = aiohttp.ClientSession(timeout=timeout, headers=headers)
+
+    try:
+        for f in files:
+            if f.kind == "image":
+                try:
+                    ext = ".png" if f.url.startswith("data:image/") else ("." + f.name.split(".")[-1] if "." in f.name else ".png")
+                    local = base_dir / f"{int(time.time())}_{f.index}_{_safe_filename(f.name)}{ext}"
+                    if f.url.startswith("data:image/"):
+                        try:
+                            import base64
+
+                            b64 = f.url.split(",", 1)[1]
+                            local.write_bytes(base64.b64decode(b64))
+                        except Exception:
+                            await event.send(event.plain_result(f"图片导出失败：{f.name}"))
+                            continue
+                    else:
+                        await _download_to_file_async(
+                            f.url,
+                            dest=local,
+                            cookie_header=cookie,
+                            base_url=base_url,
+                            session=session,
+                        )
+
+                    await event.send(event.chain_result([Comp.Image(str(local))]))
+
+                    # 发送成功后延时删除，避免适配器尚未读完文件
+                    _schedule_delete(Path(local))
+                except Exception:
+                    await event.send(event.plain_result(f"图片：{f.name}\n{f.url}"))
+                continue
+
+            try:
+                local = base_dir / f"{int(time.time())}_{f.index}_{_safe_filename(f.name)}"
+                if f.url.startswith("data:"):
+                    import base64
+
+                    b64 = f.url.split(",", 1)[1]
+                    local.write_bytes(base64.b64decode(b64))
                 else:
                     await _download_to_file_async(
                         f.url,
                         dest=local,
                         cookie_header=cookie,
                         base_url=base_url,
+                        session=session,
                     )
 
-                await event.send(event.chain_result([Comp.Image(str(local))]))
+                file_comp = _make_file_component(local)
+                if file_comp is None:
+                    raise RuntimeError("当前适配器不支持文件组件")
+                await event.send(event.chain_result([file_comp]))
 
-                # 发送成功后延时删除，避免适配器尚未读完文件
+                # 发送成功后延时删除
                 _schedule_delete(Path(local))
             except Exception:
-                await event.send(event.plain_result(f"图片：{f.name}\n{f.url}"))
-            continue
-
-        try:
-            local = base_dir / f"{int(time.time())}_{f.index}_{_safe_filename(f.name)}"
-            if f.url.startswith("data:"):
-                import base64
-
-                b64 = f.url.split(",", 1)[1]
-                local.write_bytes(base64.b64decode(b64))
-            else:
-                await _download_to_file_async(
-                    f.url,
-                    dest=local,
-                    cookie_header=cookie,
-                    base_url=base_url,
-                )
-
-            file_comp = _make_file_component(local)
-            if file_comp is None:
-                raise RuntimeError("当前适配器不支持文件组件")
-            await event.send(event.chain_result([file_comp]))
-
-            # 发送成功后延时删除
-            _schedule_delete(Path(local))
-        except Exception:
-            await event.send(event.plain_result(f"文件：{f.name}\n{_normalize_url(f.url)}"))
+                await event.send(event.plain_result(f"文件：{f.name}\n{_normalize_url(f.url)}"))
+    finally:
+        if session is not None:
+            try:
+                await session.close()
+            except Exception:
+                pass
