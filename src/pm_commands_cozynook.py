@@ -6,8 +6,6 @@ import re
 import textwrap
 import time
 import urllib.parse
-import urllib.request
-import urllib.error
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -64,17 +62,13 @@ async def _http_get_json_with_status_async(
     cookie_header: str = "",
     timeout_sec: int = 20,
 ) -> tuple[int, dict[str, Any]]:
-    """异步获取 JSON：优先 aiohttp，缺失时回退 urllib（通过 to_thread）。"""
+    """异步获取 JSON（依赖 aiohttp）。"""
 
     try:
         import aiohttp  # type: ignore
-    except Exception:
-        return await asyncio.to_thread(
-            _http_get_json_with_status,
-            url,
-            cookie_header=cookie_header,
-            timeout_sec=timeout_sec,
-        )
+    except Exception as ex:
+        logger.error(f"角色小屋：缺少 aiohttp，无法请求接口：{ex!s}")
+        return 0, {}
 
     headers = {"User-Agent": _get_user_agent()}
     if cookie_header:
@@ -106,19 +100,12 @@ async def _download_to_file_async(
     timeout_sec: int = 30,
     base_url: str | None = None,
 ) -> Path:
-    """异步下载文件：优先 aiohttp 流式写盘，缺失时回退 urllib（通过 to_thread）。"""
+    """异步下载文件（依赖 aiohttp），流式写盘避免 OOM。"""
 
     try:
         import aiohttp  # type: ignore
-    except Exception:
-        return await asyncio.to_thread(
-            _download_to_file,
-            url,
-            dest=dest,
-            cookie_header=cookie_header,
-            timeout_sec=timeout_sec,
-            base_url=base_url,
-        )
+    except Exception as ex:
+        raise RuntimeError(f"缺少 aiohttp，无法下载文件：{ex!s}")
 
     dest.parent.mkdir(parents=True, exist_ok=True)
     final_url = _resolve_url(url, base=base_url or COZYNOOK_SITE_URL)
@@ -179,7 +166,7 @@ def _parse_post_files(files: Any) -> list[CozyPostFile]:
                 name = f"image_{idx}.png"
             else:
                 try:
-                    name = urllib.request.url2pathname(url.split("?")[0].split("#")[0].split("/")[-1])
+                    name = urllib.parse.unquote(url.split("?")[0].split("#")[0].split("/")[-1])
                 except Exception:
                     name = url.split("/")[-1]
         elif isinstance(entry, dict):
@@ -327,72 +314,6 @@ def _make_file_component(file_path: Path):
         pass
 
     return None
-
-
-def _http_get_json(url: str, *, cookie_header: str = "", timeout_sec: int = 20) -> dict[str, Any]:
-    _status, payload = _http_get_json_with_status(url, cookie_header=cookie_header, timeout_sec=timeout_sec)
-    return payload
-
-
-def _http_get_json_with_status(url: str, *, cookie_header: str = "", timeout_sec: int = 20) -> tuple[int, dict[str, Any]]:
-    req = urllib.request.Request(_normalize_url(url), method="GET")
-    req.add_header("User-Agent", _get_user_agent())
-    if cookie_header:
-        req.add_header("Cookie", cookie_header)
-
-    raw = b""
-    status = 0
-    try:
-        with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
-            status = int(getattr(resp, "status", 200) or 200)
-            raw = resp.read()
-    except urllib.error.HTTPError as he:
-        status = int(getattr(he, "code", 0) or 0)
-        try:
-            raw = he.read()  # type: ignore[attr-defined]
-        except Exception:
-            raw = b""
-
-    if not raw:
-        return status, {}
-
-    try:
-        data = json.loads(raw.decode("utf-8", errors="replace"))
-        return status, data if isinstance(data, dict) else {}
-    except Exception:
-        return status, {}
-
-
-def _download_to_file(
-    url: str,
-    *,
-    dest: Path,
-    cookie_header: str = "",
-    timeout_sec: int = 30,
-    base_url: str | None = None,
-) -> Path:
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    final_url = _resolve_url(url, base=base_url or COZYNOOK_SITE_URL)
-    req = urllib.request.Request(_normalize_url(final_url), method="GET")
-    req.add_header("User-Agent", _get_user_agent())
-    if cookie_header:
-        req.add_header("Cookie", cookie_header)
-    tmp = dest.with_name(dest.name + ".part")
-    try:
-        with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
-            with tmp.open("wb") as f:
-                while True:
-                    chunk = resp.read(64 * 1024)
-                    if not chunk:
-                        break
-                    f.write(chunk)
-        tmp.replace(dest)
-    finally:
-        try:
-            tmp.unlink(missing_ok=True)
-        except Exception:
-            pass
-    return dest
 
 
 def _pick_font_path(preferred: str | None = None) -> str | None:
@@ -683,35 +604,6 @@ def _extract_recent_comments(payload: dict[str, Any]) -> list[str]:
     return out
 
 
-def _cozyverse_fetch_post_by_password(*, pwd: str, cookie: str) -> tuple[int, dict[str, Any]]:
-    """通过后端接口用 ULA 打开帖子，返回 (status, post)。
-
-    说明：优先使用 v1：`GET /api/v1/posts/by-password`（需要登录态 Cookie）。
-    若后端未部署该 v1 端点，则回退到旧端点：`GET /api/posts/by-password`。
-    """
-
-    if not cookie:
-        return 0, {}
-
-    pwd_s = (pwd or "").strip()
-
-    # 1) v1 preferred
-    url = f"{COZYNOOK_API_BASE}/v1/posts/by-password?pwd={urllib.parse.quote(pwd_s)}"
-    status, data = _http_get_json_with_status(url, cookie_header=cookie)
-    if isinstance(data, dict) and data.get("ok") and isinstance(data.get("post"), dict):
-        return status, data.get("post") or {}
-
-    # 2) fallback to legacy
-    url2 = f"{COZYNOOK_API_BASE}/posts/by-password?pwd={urllib.parse.quote(pwd_s)}"
-    status2, data2 = _http_get_json_with_status(url2, cookie_header=cookie)
-    if not isinstance(data2, dict) or not data2.get("ok"):
-        return status2 or status, {}
-    post = data2.get("post")
-    if not isinstance(post, dict):
-        return status2 or status, {}
-    return status2 or status, post
-
-
 async def _cozyverse_fetch_post_by_password_async(*, pwd: str, cookie: str) -> tuple[int, dict[str, Any]]:
     """异步版本：通过后端接口用 ULA 打开帖子，返回 (status, post)。"""
 
@@ -733,48 +625,6 @@ async def _cozyverse_fetch_post_by_password_async(*, pwd: str, cookie: str) -> t
     if not isinstance(post, dict):
         return status2 or status, {}
     return status2 or status, post
-
-
-def _cozyverse_fetch_latest_comments_v1(*, post_id: int, cookie: str, take: int = 10) -> tuple[int, list[str]]:
-    """通过 v1 插件接口拉取最新评论（需要登录态 + 频道权限）。
-
-    优先使用游标分页接口（更稳定，且明确 newest-first）：
-    - GET /api/v1/posts/{id}/comments/cursor?page_size=...
-
-    若后端未实现 cursor，则回退到页码分页（README 约定 page=1 为最新一页）。
-    """
-
-    if not cookie:
-        return 0, []
-
-    ps = max(1, min(int(take or 10), 50))
-
-    # 1) cursor: newest-first
-    url = f"{COZYNOOK_API_BASE}/v1/posts/{int(post_id)}/comments/cursor?page_size={ps}"
-    status, data = _http_get_json_with_status(url, cookie_header=cookie)
-    if isinstance(data, dict) and data.get("ok"):
-        items = data.get("items")
-        if not isinstance(items, list):
-            items = []
-        comments = _extract_recent_comments({"items": items})
-        return status, comments[: int(take)]
-
-    # 2) fallback: page=1
-    url2 = f"{COZYNOOK_API_BASE}/v1/posts/{int(post_id)}/comments?page=1&page_size={ps}"
-    status2, data2 = _http_get_json_with_status(url2, cookie_header=cookie)
-    if isinstance(data2, dict) and data2.get("ok"):
-        items2 = data2.get("items")
-        if not isinstance(items2, list):
-            # 兼容潜在结构变更：{comments:{items:...}}
-            cobj = data2.get("comments")
-            if isinstance(cobj, dict) and isinstance(cobj.get("items"), list):
-                items2 = cobj.get("items")
-            else:
-                items2 = []
-        comments = _extract_recent_comments({"items": items2})
-        return status2, comments[: int(take)]
-
-    return status2 or status, []
 
 
 async def _cozyverse_fetch_latest_comments_v1_async(
@@ -907,7 +757,8 @@ async def cozynook_get(self, event: AstrMessageEvent, arg, *, allow_import: bool
         except Exception:
             preferred_font = ""
 
-        preview = _render_post_preview_image(
+        preview = await asyncio.to_thread(
+            _render_post_preview_image,
             title=title,
             author=author,
             date_str=date_str,

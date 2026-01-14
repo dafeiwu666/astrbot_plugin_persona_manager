@@ -26,11 +26,15 @@
 
 1. 确保你已经安装了 [AstrBot](https://github.com/Soulter/AstrBot)。
 2. 将本插件文件夹放入 AstrBot 的 `data/plugins/` 目录下。
-3. （可选）安装 Pillow：当使用 CozyNook“帖子预览图”渲染能力时需要。
+3. 安装依赖：CozyNook（角色小屋）联网功能依赖 `aiohttp`。
+    ```bash
+    pip install aiohttp
+    ```
+4. （可选）安装 Pillow：当使用 CozyNook“帖子预览图”渲染能力时需要。
    ```bash
    pip install pillow
    ```
-4. 重启 AstrBot。
+5. 重启 AstrBot。
 
 ## 🔧 配置
 

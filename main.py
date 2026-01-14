@@ -42,7 +42,11 @@ class Main(Star):
         data_dir: Path = StarTools.get_data_dir("astrbot_plugin_persona_manager")
         self._repo = StoreRepository(data_dir / "store.json", logger=logger)
         self._svc = PersonaService(self._repo, now_ts=self._now_ts)
-        self._limiter = LLMLimiter(now_date=get_current_date_str)
+        self._limiter = LLMLimiter(
+            now_date=get_current_date_str,
+            storage_path=data_dir / "llm_usage.json",
+            logger=logger,
+        )
         self._nickname_sync = NicknameSync()
         self._nickname_sync.load_config(config)
 
