@@ -4,29 +4,19 @@ import time
 from sys import maxsize
 from pathlib import Path
 
-import astrbot.api.message_components as Comp
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, MessageChain, filter
 from astrbot.api.message_components import Plain
 from astrbot.api.star import Context, Star, StarTools
 from astrbot.core.provider.entities import ProviderRequest
 from astrbot.core.star.filter.command import GreedyStr
-from astrbot.core.utils.session_waiter import SessionController, session_waiter
 
 # 插件代码统一放在 src 子包内；这里使用明确的相对导入，避免加载器差异导致的 ImportError。
 from .src.config import PersonaPluginConfig
 from .src.llm_limiter import LLMLimiter, get_current_date_str
-from .src.models import EMPTY_PERSONA_NAME
 from .src.nickname_sync import NicknameSync
 from .src.repository import StoreRepository
 from .src.service import PersonaService
-from .src.session_state import PersonaEditStage, PersonaEditState
-from .src.text_utils import (
-    is_finish_edit_command,
-    normalize_one_line,
-    truncate_text,
-    split_long_text,
-)
 from .src import pm_commands_basic as _pm_commands_basic
 from .src import pm_keyword_trigger as _pm_keyword_trigger
 from .src import pm_llm_hook as _pm_llm_hook
@@ -166,7 +156,7 @@ class Main(Star):
     # -------------------------
 
     @filter.event_message_type(filter.EventMessageType.ALL, priority=maxsize - 50)
-    async def keyword_trigger_llm(self, event: AstrMessageEvent):
+    async def keyword_trigger_llm(self, event: AstrMessageEvent, *args: object, **kwargs: object):
         """平台消息下发时：关键词触发临时人设并发起一次 LLM 请求。"""
         async for r in _pm_keyword_trigger.keyword_trigger_llm(self, event):
             yield r
@@ -727,7 +717,13 @@ class Main(Star):
     # -------------------------
 
     @filter.on_llm_request()
-    async def inject_persona(self, event: AstrMessageEvent, req: ProviderRequest):
+    async def inject_persona(
+        self,
+        event: AstrMessageEvent,
+        req: ProviderRequest,
+        *args: object,
+        **kwargs: object,
+    ):
         """LLM 请求时：注入当前角色设定到 system prompt。"""
         await _pm_llm_hook.inject_persona(self, event, req)
 
@@ -749,15 +745,15 @@ class Main(Star):
 
     @filter.command("角色小屋")
     async def cozynook_market(self, event: AstrMessageEvent):
-        """平台消息下发时：打开 CozyNook 角色小屋市场帖（仅导出）。"""
-        # CozyNook 市场页：只允许导出
+        """平台消息下发时：打开 CozyNook 角色小屋市场帖（默认仅查看，输入 /导出 才导出）。"""
+        # CozyNook 市场页：只允许导出（但不默认触发导出）
         async for r in _pm_commands_cozynook.cozynook_get(self, event, "", allow_import=False):
             yield r
 
-    @filter.command("获取角色")
-    async def cozynook_get_role(self, event: AstrMessageEvent, 密码或ULA: GreedyStr = GreedyStr("")):
-        """平台消息下发时：从 CozyNook 获取帖子（可导入或导出）。"""
-        # 指定 ula-xxxx：允许导入或导出
+    @filter.command("查询密码")
+    async def cozynook_query_pwd(self, event: AstrMessageEvent, 密码或ULA: GreedyStr = GreedyStr("")):
+        """平台消息下发时：按 ULA(密码) 打开 CozyNook 帖子（可导入或导出）。"""
+        # 指定 ula-xxxx：允许导入或导出（默认不触发，需选择 /导入 或 /导出）
         async for r in _pm_commands_cozynook.cozynook_get(self, event, 密码或ULA, allow_import=True):
             yield r
 

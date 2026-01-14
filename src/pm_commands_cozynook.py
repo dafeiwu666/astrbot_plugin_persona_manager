@@ -10,6 +10,8 @@ import sys
 import textwrap
 import time
 import urllib.parse
+import urllib.request
+import urllib.error
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -38,7 +40,7 @@ from astrbot.api.star import StarTools
 from astrbot.core.utils.session_waiter import SessionController, session_waiter
 
 from .models import EMPTY_PERSONA_NAME
-from .text_utils import normalize_one_line, split_long_text
+from .text_utils import normalize_command_text, normalize_one_line, parse_command_choice, split_long_text
 
 
 _ULA_RE = re.compile(r"^ula-[A-Za-z0-9]{16}$", re.IGNORECASE)
@@ -82,7 +84,7 @@ async def _http_get_json_with_status_async(
     *,
     cookie_header: str = "",
     timeout_sec: int = 20,
-    session: "aiohttp.ClientSession | None" = None,
+    session: Any = None,
 ) -> tuple[int, dict[str, Any]]:
     """异步获取 JSON（依赖 aiohttp）。"""
 
@@ -129,7 +131,7 @@ async def _download_to_file_async(
     cookie_header: str = "",
     timeout_sec: int = 30,
     base_url: str | None = None,
-    session: "aiohttp.ClientSession | None" = None,
+    session: Any = None,
 ) -> Path:
     """异步下载文件（依赖 aiohttp），流式写盘避免 OOM。"""
 
@@ -230,6 +232,134 @@ async def _download_to_file_async(
                 await session.close()
             except Exception:
                 pass
+        try:
+            tmp.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+
+def _is_safe_download_host_sync(host: str) -> bool:
+    """同步版本的下载 host 安全检查（用于无 aiohttp 时的回退下载）。
+
+    在 asyncio.to_thread 中调用，允许阻塞解析。
+    """
+
+    if not host:
+        return False
+
+    host_s = host.strip().strip("[]")
+    if _is_probably_localhost(host_s):
+        return False
+
+    # IP 字面量：快速判定
+    try:
+        if _is_private_or_local_ip(host_s):
+            return False
+        # 如果是合法 public IP，会走到这里
+        return True
+    except Exception:
+        pass
+
+    # 域名：DNS 解析所有 A/AAAA，任一落到私网/回环则拒绝
+    try:
+        infos = socket.getaddrinfo(host_s, None)
+    except Exception:
+        return False
+
+    ips: list[str] = []
+    for _family, _type, _proto, _canonname, sockaddr in infos:
+        try:
+            ip = sockaddr[0]
+            if isinstance(ip, str) and ip:
+                ips.append(ip)
+        except Exception:
+            continue
+
+    if not ips:
+        return False
+
+    for ip in ips:
+        try:
+            if _is_private_or_local_ip(ip):
+                return False
+        except Exception:
+            return False
+
+    return True
+
+
+def _download_to_file_fallback_sync(
+    url: str,
+    *,
+    dest: Path,
+    cookie_header: str = "",
+    timeout_sec: int = 30,
+    base_url: str | None = None,
+) -> Path:
+    """无 aiohttp 时的同步下载回退（在 to_thread 中执行）。
+
+    - 保留 SSRF 防护（host/IP 检查）
+    - 手动处理重定向，避免跳到内网
+    - 以 .part 临时文件写入，完成后 replace 原子落盘
+    """
+
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    final_url = _resolve_url(url, base=base_url or COZYNOOK_SITE_URL)
+
+    try:
+        parts0 = urllib.parse.urlsplit(final_url)
+        if parts0.scheme not in {"http", "https"}:
+            raise ValueError("unsupported scheme")
+        host0 = parts0.hostname or ""
+        if not _is_safe_download_host_sync(host0):
+            raise ValueError(f"blocked host: {host0}")
+    except Exception as ex:
+        raise RuntimeError(f"疑似 SSRF 风险，已拒绝下载该 URL: {final_url}") from ex
+
+    class _NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[override]
+            return None
+
+    opener = urllib.request.build_opener(_NoRedirect)
+
+    headers = {"User-Agent": _get_user_agent()}
+    if cookie_header:
+        headers["Cookie"] = cookie_header
+
+    tmp = dest.with_name(dest.name + ".part")
+    current_url = final_url
+    try:
+        for _ in range(6):
+            parts = urllib.parse.urlsplit(current_url)
+            host = parts.hostname or ""
+            if not _is_safe_download_host_sync(host):
+                raise RuntimeError(f"疑似 SSRF 风险，已拒绝下载该 URL: {current_url}")
+
+            req = urllib.request.Request(_normalize_url(current_url), method="GET")
+            for k, v in headers.items():
+                req.add_header(k, v)
+
+            try:
+                with opener.open(req, timeout=max(int(timeout_sec), 1)) as resp:
+                    with tmp.open("wb") as f:
+                        while True:
+                            chunk = resp.read(64 * 1024)
+                            if not chunk:
+                                break
+                            f.write(chunk)
+                tmp.replace(dest)
+                return dest
+            except urllib.error.HTTPError as he:
+                code = int(getattr(he, "code", 0) or 0)
+                if code in {301, 302, 303, 307, 308}:
+                    loc = he.headers.get("Location") or he.headers.get("location")
+                    if loc:
+                        current_url = urllib.parse.urljoin(current_url, str(loc))
+                        continue
+                raise
+
+        raise RuntimeError(f"下载重定向过多，已放弃：{final_url}")
+    finally:
         try:
             tmp.unlink(missing_ok=True)
         except Exception:
@@ -463,19 +593,90 @@ def _is_importable_text_file(f: CozyPostFile) -> bool:
 
 
 def _make_file_component(file_path: Path):
-    # 优先对齐 parser：astrbot.core.message.components.File
-    try:
-        from astrbot.core.message.components import File as CoreFile
+    def _try_ctor(cls, *args, **kwargs):
+        try:
+            return cls(*args, **kwargs)
+        except Exception:
+            return None
 
-        return CoreFile(name=file_path.name, file=str(file_path))
+    def _try_from_fs(cls):
+        # 常见命名：fromFileSystem / from_file_system
+        for attr in ("fromFileSystem", "from_file_system", "from_path", "fromPath"):
+            fn = getattr(cls, attr, None)
+            if callable(fn):
+                try:
+                    return fn(str(file_path))
+                except Exception:
+                    pass
+        return None
+
+    # 1) 优先尝试 API 组件（很多插件用的是 astrbot.api.message_components.File）
+    try:
+        from astrbot.api.message_components import File as ApiFile
+
+        got = _try_from_fs(ApiFile)
+        if got is not None:
+            return got
+
+        for kwargs in (
+            {"name": file_path.name, "file": str(file_path)},
+            {"name": file_path.name, "path": str(file_path)},
+            {"file": str(file_path)},
+            {"path": str(file_path)},
+        ):
+            got = _try_ctor(ApiFile, **kwargs)
+            if got is not None:
+                return got
+
+        got = _try_ctor(ApiFile, str(file_path))
+        if got is not None:
+            return got
     except Exception:
         pass
 
-    # 其次尝试 astrbot.api.message_components 的 File（若存在）
+    # 2) 再尝试核心组件（不同版本参数名/构造方式可能不同）
+    try:
+        from astrbot.core.message.components import File as CoreFile
+
+        got = _try_from_fs(CoreFile)
+        if got is not None:
+            return got
+
+        for kwargs in (
+            {"name": file_path.name, "file": str(file_path)},
+            {"name": file_path.name, "path": str(file_path)},
+            {"file": str(file_path)},
+            {"path": str(file_path)},
+        ):
+            got = _try_ctor(CoreFile, **kwargs)
+            if got is not None:
+                return got
+
+        got = _try_ctor(CoreFile, str(file_path))
+        if got is not None:
+            return got
+    except Exception:
+        pass
+
+    # 3) 最后尝试 Comp.File（动态获取）
     try:
         file_cls = getattr(Comp, "File", None)
         if file_cls is not None:
-            return file_cls(name=file_path.name, file=str(file_path))
+            got = _try_from_fs(file_cls)
+            if got is not None:
+                return got
+            for kwargs in (
+                {"name": file_path.name, "file": str(file_path)},
+                {"name": file_path.name, "path": str(file_path)},
+                {"file": str(file_path)},
+                {"path": str(file_path)},
+            ):
+                got = _try_ctor(file_cls, **kwargs)
+                if got is not None:
+                    return got
+            got = _try_ctor(file_cls, str(file_path))
+            if got is not None:
+                return got
     except Exception:
         pass
 
@@ -649,7 +850,7 @@ def _render_post_preview_image(
         y += 48
     y += 8
 
-    meta = f"{(author or 'Unknown').strip()} · {date_str} · {pwd.upper()}"
+    meta = f"{(author or 'Unknown').strip()} · {date_str}"
     draw.text((pad, y), meta[:120], fill=subtle, font=font_meta)
     y += 44
 
@@ -705,8 +906,7 @@ def _format_post_text(
     comments: list[str],
 ) -> str:
     title_line = (title or "(无标题)").strip()
-    # 不额外新增“密码”分区：将 ULA 拼入标题行，满足“标题/作者/简介/正文/附件名/评论”结构。
-    title_line = f"{title_line}（{pwd.upper()}）"
+    # 展示时不输出密码（ULA）。
 
     lines: list[str] = [f"标题：{title_line}", f"作者：{(author or '').strip()}"]
 
@@ -810,7 +1010,7 @@ async def _cozyverse_fetch_post_by_password_async(
     *,
     pwd: str,
     cookie: str,
-    session: "aiohttp.ClientSession | None" = None,
+    session: Any = None,
 ) -> tuple[int, dict[str, Any]]:
     """异步版本：通过后端接口用 ULA 打开帖子，返回 (status, post)。"""
 
@@ -839,7 +1039,7 @@ async def _cozyverse_fetch_latest_comments_v1_async(
     post_id: int,
     cookie: str,
     take: int = 10,
-    session: "aiohttp.ClientSession | None" = None,
+    session: Any = None,
 ) -> tuple[int, list[str]]:
     """异步版本：拉取最新评论。"""
 
@@ -874,7 +1074,7 @@ async def _cozyverse_fetch_latest_comments_v1_async(
 
 
 async def cozynook_get(self, event: AstrMessageEvent, arg, *, allow_import: bool, mode: str | None = None):
-    """/角色小屋 与 /获取角色 的统一入口。
+    """/角色小屋 与 /查询密码 的统一入口。
 
     mode:
       - None: 交互式询问导入/导出
@@ -888,9 +1088,16 @@ async def cozynook_get(self, event: AstrMessageEvent, arg, *, allow_import: bool
         return
 
     raw = str(arg or "").strip()
-    pwd = DEFAULT_MARKET_POST_PWD if not raw else raw
+    if not raw:
+        # /角色小屋：允许无参数打开市场帖；/查询密码：必须指定 ULA。
+        if allow_import:
+            yield event.plain_result("用法：/查询密码 ula-XXXXXXXXXXXXXXXX（16位）")
+            return
+        pwd = DEFAULT_MARKET_POST_PWD
+    else:
+        pwd = raw
     if not _is_ula(pwd):
-        yield event.plain_result("用法：/获取角色 ula-XXXXXXXXXXXXXXXX（16位）")
+        yield event.plain_result("用法：/查询密码 ula-XXXXXXXXXXXXXXXX（16位）")
         return
 
     cookie = ""
@@ -963,8 +1170,18 @@ async def cozynook_get(self, event: AstrMessageEvent, arg, *, allow_import: bool
         return
 
     if not post:
-        if int(status) == 404:
+        st = int(status or 0)
+        if st == 404:
             yield event.plain_result("未获取到帖子内容（密码可能错误或帖子不存在）。")
+        elif st == 401:
+            yield event.plain_result(
+                "未获取到帖子内容（登录态失效或未登录，接口返回 401）。\n"
+                "请更新插件配置 `cozynook_sid_cookie`：推荐填 `cv_auth=...`（从浏览器 Cookie 复制）。"
+            )
+        elif st == 403:
+            yield event.plain_result("未获取到帖子内容（无权限访问，接口返回 403）。")
+        elif st == 0:
+            yield event.plain_result("未获取到帖子内容（网络异常或接口无响应）。")
         else:
             yield event.plain_result("未获取到帖子内容（接口返回异常）。")
         if close_session and session is not None:
@@ -1045,29 +1262,86 @@ async def cozynook_get(self, event: AstrMessageEvent, arg, *, allow_import: bool
             nodes.append(Comp.Node(uin=uin, name="角色小屋", content=[Plain(p)]))
         yield event.chain_result([Comp.Nodes(nodes)])
 
-    if not allow_import:
-        async for r in _handle_export_flow(
-            self,
-            event,
-            pwd=pwd,
-            title=title,
-            author=author,
-            intro=intro,
-            content=content,
-            files=files,
-            cookie=cookie,
-            base_url=COZYNOOK_SITE_URL,
-            session=session,
-        ):
-            yield r
-        if close_session and session is not None:
-            try:
-                await session.close()
-            except Exception:
-                pass
-        return
-
     mode_norm = (mode or "").strip().lower()
+    if not allow_import:
+        # /角色小屋：默认仅查看；只有用户明确输入 /导出 才触发导出。
+        if mode_norm in {"export", "导出"}:
+            async for r in _handle_export_flow(
+                self,
+                event,
+                pwd=pwd,
+                title=title,
+                author=author,
+                intro=intro,
+                content=content,
+                files=files,
+                cookie=cookie,
+                base_url=COZYNOOK_SITE_URL,
+                session=session,
+            ):
+                yield r
+            if close_session and session is not None:
+                try:
+                    await session.close()
+                except Exception:
+                    pass
+            return
+
+        yield event.plain_result("如需导出附件/内容，请输入：/导出")
+
+        timeout = int(getattr(self._cfg, "session_timeout_sec", 300) or 300)
+        initial_sender_id = str(event.get_sender_id())
+        initial_event = event
+
+        @session_waiter(timeout=timeout, record_history_chains=False)
+        async def waiter(controller: SessionController, e: AstrMessageEvent):
+            if self._is_self_message_event(e) or self._is_empty_echo_event(e):
+                controller.keep(timeout=timeout, reset_timeout=True)
+                return
+            if str(e.get_sender_id()) != initial_sender_id:
+                controller.keep(timeout=timeout, reset_timeout=True)
+                return
+            if e is initial_event:
+                controller.keep(timeout=timeout, reset_timeout=True)
+                return
+
+            e.stop_event()
+
+            text = (e.message_str or "").strip().lstrip("/／").strip()
+            if text in {"导出", "export"}:
+                controller.stop()
+                async for rr in _handle_export_flow(
+                    self,
+                    e,
+                    pwd=pwd,
+                    title=title,
+                    author=author,
+                    intro=intro,
+                    content=content,
+                    files=files,
+                    cookie=cookie,
+                    base_url=COZYNOOK_SITE_URL,
+                    session=session,
+                ):
+                    await e.send(rr)
+                return
+
+            # 未明确选择 /导出：立刻结束会话，避免误吞其它输入造成反复提示。
+            await e.send(e.plain_result("未发送 /导出，已退出。需要导出请重新发送：/角色小屋"))
+            controller.stop()
+            return
+
+        try:
+            await waiter(event)
+        except TimeoutError:
+            yield event.plain_result("会话超时，已退出导出选择。")
+        finally:
+            if close_session and session is not None:
+                try:
+                    await session.close()
+                except Exception:
+                    pass
+        return
     if mode_norm in {"import", "导入"}:
         async for r in _handle_import_flow(
             self,
@@ -1103,7 +1377,6 @@ async def cozynook_get(self, event: AstrMessageEvent, arg, *, allow_import: bool
 
     @session_waiter(timeout=timeout, record_history_chains=False)
     async def waiter(controller: SessionController, e: AstrMessageEvent):
-        e.stop_event()
         if self._is_self_message_event(e) or self._is_empty_echo_event(e):
             controller.keep(timeout=timeout, reset_timeout=True)
             return
@@ -1113,6 +1386,8 @@ async def cozynook_get(self, event: AstrMessageEvent, arg, *, allow_import: bool
         if e is initial_event:
             controller.keep(timeout=timeout, reset_timeout=True)
             return
+
+        e.stop_event()
 
         text = (e.message_str or "").strip().lstrip("/／").strip()
         if text in {"导出", "export"}:
@@ -1150,13 +1425,20 @@ async def cozynook_get(self, event: AstrMessageEvent, arg, *, allow_import: bool
                 await e.send(rr)
             return
 
-        await e.send(e.plain_result("请输入：/导入 或 /导出"))
-        controller.keep(timeout=timeout, reset_timeout=True)
+        # 未明确选择 /导入 或 /导出：立刻结束会话并终止传播。
+        await e.send(
+            e.plain_result(
+                "未选择操作，已退出。需要导入/导出请重新发送：/查询密码 ula-xxxx\n"
+                "或直接用：/导入角色 ula-xxxx /导出角色 ula-xxxx"
+            )
+        )
+        controller.stop()
+        return
 
     try:
         await waiter(event)
     except TimeoutError:
-        yield event.plain_result("会话超时，已退出。")
+        yield event.plain_result("会话超时，已退出操作选择。")
 
     if close_session and session is not None:
         try:
@@ -1177,14 +1459,14 @@ async def _handle_export_flow(
     files: list[CozyPostFile],
     cookie: str,
     base_url: str,
-    session: "aiohttp.ClientSession | None" = None,
+    session: Any = None,
 ):
     # 导出流程不再重复发送一遍聊天记录（获取帖子时已发送）。
     if not files:
         return
 
     listing = "附件列表：\n" + "\n".join([f"{f.index}. {'[图片]' if f.kind=='image' else '[文件]'} {f.name}" for f in files])
-    yield event.plain_result(listing + "\n\n请输入要导出的序号（支持多选，如：1 3 4），或输入 /跳过")
+    yield event.plain_result(listing + "\n\n请输入要导出的序号（支持多选，如：1 3 4）")
 
     timeout = int(getattr(self._cfg, "session_timeout_sec", 300) or 300)
     initial_sender_id = str(event.get_sender_id())
@@ -1203,14 +1485,10 @@ async def _handle_export_flow(
             controller.keep(timeout=timeout, reset_timeout=True)
             return
 
-        text = (e.message_str or "").strip().lstrip("/／").strip()
-        if text in {"跳过", "skip"}:
-            controller.stop()
-            return
-
-        picks = _parse_number_picks(text)
+        raw_text = (e.message_str or "").strip()
+        picks = _parse_number_picks(normalize_command_text(raw_text))
         if not picks:
-            await e.send(e.plain_result("请输入序号（如：1 2 3），或 /跳过"))
+            await e.send(e.plain_result("请输入序号（如：1 2 3）"))
             controller.keep(timeout=timeout, reset_timeout=True)
             return
 
@@ -1227,7 +1505,7 @@ async def _handle_export_flow(
     try:
         await waiter(event)
     except TimeoutError:
-        yield event.plain_result("会话超时，已结束导出。")
+        yield event.plain_result("会话超时，已退出导出。")
 
 
 async def _handle_import_flow(
@@ -1242,7 +1520,7 @@ async def _handle_import_flow(
     files: list[CozyPostFile],
     cookie: str,
     base_url: str,
-    session: "aiohttp.ClientSession | None" = None,
+    session: Any = None,
 ):
     timeout = int(getattr(self._cfg, "session_timeout_sec", 300) or 300)
     initial_sender_id = str(event.get_sender_id())
@@ -1291,8 +1569,8 @@ async def _handle_import_flow(
             return
 
         if state["stage"] == "tags":
-            t = text.lstrip("/／").strip()
-            state["tags"] = [] if t == "跳过" else [x for x in text.split() if x.strip()]
+            choice = parse_command_choice(text)
+            state["tags"] = [] if choice == "skip" else [x for x in text.split() if x.strip()]
             state["stage"] = "wrapper_choice"
             await e.send(
                 e.plain_result(
@@ -1307,8 +1585,8 @@ async def _handle_import_flow(
             return
 
         if state["stage"] == "wrapper_choice":
-            t = text.lstrip("/／").strip().lower()
-            if t in {"是", "y", "yes", "1", "开启", "开", "使用"}:
+            choice = parse_command_choice(text)
+            if choice == "yes":
                 state["use_wrapper"] = True
                 state["wrapper_use_config"] = True
                 state["stage"] = "clean_choice"
@@ -1324,7 +1602,7 @@ async def _handle_import_flow(
                 controller.keep(timeout=timeout, reset_timeout=True)
                 return
 
-            if t in {"否", "n", "no", "0", "自定义", "custom"}:
+            if choice in {"no", "custom"}:
                 state["use_wrapper"] = True
                 state["wrapper_use_config"] = False
                 state["stage"] = "wrapper_prefix"
@@ -1332,7 +1610,7 @@ async def _handle_import_flow(
                 controller.keep(timeout=timeout, reset_timeout=True)
                 return
 
-            if t in {"跳过", "skip"}:
+            if choice == "skip":
                 state["use_wrapper"] = False
                 state["stage"] = "clean_choice"
                 await e.send(
@@ -1352,16 +1630,16 @@ async def _handle_import_flow(
             return
 
         if state["stage"] == "wrapper_prefix":
-            t = text.lstrip("/／").strip()
-            state["wrapper_prefix"] = "" if t == "跳过" else (e.message_str or "").strip()
+            raw = (e.message_str or "").strip()
+            state["wrapper_prefix"] = "" if parse_command_choice(raw) == "skip" else raw
             state["stage"] = "wrapper_suffix"
             await e.send(e.plain_result("请输入后置提示词（输入 /跳过 表示留空）"))
             controller.keep(timeout=timeout, reset_timeout=True)
             return
 
         if state["stage"] == "wrapper_suffix":
-            t = text.lstrip("/／").strip()
-            state["wrapper_suffix"] = "" if t == "跳过" else (e.message_str or "").strip()
+            raw = (e.message_str or "").strip()
+            state["wrapper_suffix"] = "" if parse_command_choice(raw) == "skip" else raw
             state["stage"] = "clean_choice"
             await e.send(
                 e.plain_result(
@@ -1376,12 +1654,12 @@ async def _handle_import_flow(
             return
 
         if state["stage"] == "clean_choice":
-            t = text.lstrip("/／").strip().lower()
-            if t in {"是", "y", "yes", "1", "开启", "开", "使用"}:
+            choice = parse_command_choice(text)
+            if choice == "yes":
                 state["clean_use_config"] = True
                 state["clean_regex"] = ""
                 state["stage"] = "pick_prep"
-            elif t in {"否", "n", "no", "0", "自定义", "custom"}:
+            elif choice in {"no", "custom"}:
                 state["clean_use_config"] = False
                 state["stage"] = "clean_regex"
                 await e.send(
@@ -1392,7 +1670,7 @@ async def _handle_import_flow(
                 )
                 controller.keep(timeout=timeout, reset_timeout=True)
                 return
-            elif t in {"跳过", "skip"}:
+            elif choice == "skip":
                 state["clean_use_config"] = False
                 state["clean_regex"] = ""
                 state["stage"] = "pick_prep"
@@ -1423,8 +1701,7 @@ async def _handle_import_flow(
                 return
 
         if state["stage"] == "clean_regex":
-            t = text.lstrip("/／").strip()
-            if t in {"跳过", "skip"}:
+            if parse_command_choice(text) == "skip":
                 state["clean_regex"] = ""
                 state["stage"] = "pick_prep"
                 # 复用 clean_choice 的 pick_prep 逻辑：直接走一遍
@@ -1482,13 +1759,12 @@ async def _handle_import_flow(
             return
 
         if state["stage"] == "pick":
-            t = text.lstrip("/／").strip()
-            if t in {"跳过", "skip"}:
+            if parse_command_choice(text) == "skip":
                 state["picks"] = [1]
                 controller.stop()
                 return
 
-            picks = _parse_number_picks(text)
+            picks = _parse_number_picks(normalize_command_text(text))
             options = state.get("options") or []
             if not picks:
                 await e.send(e.plain_result("请输入序号（如：1 2 3），或 /跳过。"))
@@ -1558,7 +1834,7 @@ async def _handle_import_flow(
     imported_text = "\n\n".join([t for t in imported_parts if (t or "").strip()]).strip()
 
     final_intro = normalize_one_line(user_intro)
-    source_line = normalize_one_line(f"来源：{title} / {author} / {pwd.upper()}")
+    source_line = normalize_one_line(f"来源：{title} / {author}")
     final_intro = (final_intro + "\n" + source_line).strip() if final_intro else source_line
 
     try:
@@ -1620,20 +1896,23 @@ async def _build_import_content_from_files(
     *,
     cookie: str,
     base_url: str,
-    session: "aiohttp.ClientSession | None" = None,
+    session: Any = None,
 ) -> str:
     parts: list[str] = []
     base_dir = StarTools.get_data_dir("astrbot_plugin_persona_manager") / "cozynook_cache" / "downloads"
     base_dir.mkdir(parents=True, exist_ok=True)
     await asyncio.to_thread(_prune_cache_dir, base_dir)
 
-    if not _AIOHTTP_AVAILABLE or aiohttp is None:
-        # 没有 aiohttp 时导入附件文本直接跳过
-        return ""
+    timeout_sec = max(int(getattr(self._cfg, "cozynook_timeout_sec", 30) or 30), 1)
+    use_aiohttp = bool(_AIOHTTP_AVAILABLE and aiohttp is not None)
+
+    # 外部传入 session 可能已被关闭（例如上层复用了全局 session 但生命周期已结束）。
+    if use_aiohttp and session is not None and bool(getattr(session, "closed", False)):
+        session = None
 
     close_session = False
-    if session is None:
-        timeout = aiohttp.ClientTimeout(total=max(int(getattr(self._cfg, "cozynook_timeout_sec", 30) or 30), 1))
+    if use_aiohttp and session is None:
+        timeout = aiohttp.ClientTimeout(total=timeout_sec)
         headers = {"User-Agent": _get_user_agent()}
         if cookie:
             headers["Cookie"] = cookie
@@ -1650,13 +1929,25 @@ async def _build_import_content_from_files(
             allow_by_ext = ext in _TEXT_EXTS
 
             try:
-                local = await _download_to_file_async(
-                    f.url,
-                    dest=base_dir / f"{int(time.time())}_{f.index}_{f.name}",
-                    cookie_header=cookie,
-                    base_url=base_url,
-                    session=session,
-                )
+                dest = base_dir / f"{int(time.time())}_{f.index}_{f.name}"
+                if use_aiohttp:
+                    local = await _download_to_file_async(
+                        f.url,
+                        dest=dest,
+                        cookie_header=cookie,
+                        timeout_sec=timeout_sec,
+                        base_url=base_url,
+                        session=session,
+                    )
+                else:
+                    local = await asyncio.to_thread(
+                        _download_to_file_fallback_sync,
+                        f.url,
+                        dest=dest,
+                        cookie_header=cookie,
+                        timeout_sec=timeout_sec,
+                        base_url=base_url,
+                    )
             except Exception:
                 continue
 
@@ -1680,7 +1971,7 @@ async def _build_import_content_from_files(
                 except Exception:
                     pass
     finally:
-        if close_session and session is not None:
+        if use_aiohttp and close_session and session is not None:
             try:
                 await session.close()
             except Exception:
@@ -1696,15 +1987,21 @@ async def _send_files(
     *,
     cookie: str,
     base_url: str,
-    session: "aiohttp.ClientSession | None" = None,
+    session: Any = None,
 ):
     base_dir = StarTools.get_data_dir("astrbot_plugin_persona_manager") / "cozynook_cache" / "exports"
     base_dir.mkdir(parents=True, exist_ok=True)
     await asyncio.to_thread(_prune_cache_dir, base_dir)
 
+    timeout_sec = max(int(getattr(self._cfg, "cozynook_timeout_sec", 30) or 30), 1)
+
+    # 外部传入 session 可能已被关闭；此时直接丢弃并重建，避免下载失败回退 URL。
+    if session is not None and bool(getattr(session, "closed", False)):
+        session = None
+
     close_session = False
     if session is None and _AIOHTTP_AVAILABLE and aiohttp is not None:
-        timeout = aiohttp.ClientTimeout(total=max(int(getattr(self._cfg, "cozynook_timeout_sec", 30) or 30), 1))
+        timeout = aiohttp.ClientTimeout(total=timeout_sec)
         headers = {"User-Agent": _get_user_agent()}
         if cookie:
             headers["Cookie"] = cookie
@@ -1731,18 +2028,48 @@ async def _send_files(
                             await event.send(event.plain_result(f"图片导出失败：{f.name}"))
                             continue
                     else:
-                        await _download_to_file_async(
-                            f.url,
-                            dest=local,
-                            cookie_header=cookie,
-                            base_url=base_url,
-                            session=session,
-                        )
+                        if session is not None:
+                            try:
+                                await _download_to_file_async(
+                                    f.url,
+                                    dest=local,
+                                    cookie_header=cookie,
+                                    timeout_sec=timeout_sec,
+                                    base_url=base_url,
+                                    session=session,
+                                )
+                            except RuntimeError as ex:
+                                # aiohttp session 可能在执行过程中被关闭；此时回退到同步下载。
+                                if "Session is closed" in str(ex):
+                                    await asyncio.to_thread(
+                                        _download_to_file_fallback_sync,
+                                        f.url,
+                                        dest=local,
+                                        cookie_header=cookie,
+                                        timeout_sec=timeout_sec,
+                                        base_url=base_url,
+                                    )
+                                else:
+                                    raise
+                        else:
+                            await asyncio.to_thread(
+                                _download_to_file_fallback_sync,
+                                f.url,
+                                dest=local,
+                                cookie_header=cookie,
+                                timeout_sec=timeout_sec,
+                                base_url=base_url,
+                            )
 
-                    await event.send(event.chain_result([Comp.Image(str(local))]))
-
-                    # 发送成功后延时删除，避免适配器尚未读完文件
-                    _schedule_delete(Path(local))
+                    try:
+                        await event.send(event.chain_result([Comp.Image(str(local))]))
+                    finally:
+                        # 无论发送成功与否，只要落盘了就延时清理，避免缓存堆积。
+                        try:
+                            if Path(local).exists():
+                                _schedule_delete(Path(local))
+                        except Exception:
+                            pass
                 except Exception:
                     await event.send(event.plain_result(f"图片：{f.name}\n{f.url}"))
                 continue
@@ -1759,21 +2086,51 @@ async def _send_files(
 
                     await asyncio.to_thread(_decode_and_write_file)
                 else:
-                    await _download_to_file_async(
-                        f.url,
-                        dest=local,
-                        cookie_header=cookie,
-                        base_url=base_url,
-                        session=session,
-                    )
+                    if session is not None:
+                        try:
+                            await _download_to_file_async(
+                                f.url,
+                                dest=local,
+                                cookie_header=cookie,
+                                timeout_sec=timeout_sec,
+                                base_url=base_url,
+                                session=session,
+                            )
+                        except RuntimeError as ex:
+                            if "Session is closed" in str(ex):
+                                await asyncio.to_thread(
+                                    _download_to_file_fallback_sync,
+                                    f.url,
+                                    dest=local,
+                                    cookie_header=cookie,
+                                    timeout_sec=timeout_sec,
+                                    base_url=base_url,
+                                )
+                            else:
+                                raise
+                    else:
+                        await asyncio.to_thread(
+                            _download_to_file_fallback_sync,
+                            f.url,
+                            dest=local,
+                            cookie_header=cookie,
+                            timeout_sec=timeout_sec,
+                            base_url=base_url,
+                        )
 
                 file_comp = _make_file_component(local)
                 if file_comp is None:
                     raise RuntimeError("当前适配器不支持文件组件")
-                await event.send(event.chain_result([file_comp]))
 
-                # 发送成功后延时删除
-                _schedule_delete(Path(local))
+                try:
+                    await event.send(event.chain_result([file_comp]))
+                finally:
+                    # 无论发送成功与否，只要落盘了就延时清理
+                    try:
+                        if Path(local).exists():
+                            _schedule_delete(Path(local))
+                    except Exception:
+                        pass
             except Exception:
                 await event.send(event.plain_result(f"文件：{f.name}\n{_normalize_url(f.url)}"))
     finally:

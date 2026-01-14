@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -204,6 +205,32 @@ class PersonaPluginConfig(BaseModel):
         raw = (self.cozynook_sid_cookie or "").strip()
         if not raw:
             return ""
+
+        # 兼容：从浏览器/抓包复制时可能包含 "Cookie:" 前缀
+        lower = raw.lower()
+        if lower.startswith("cookie:"):
+            raw = raw.split(":", 1)[1].strip()
+            if not raw:
+                return ""
+
+        # 优先提取真实会被后端识别的 Cookie 名（cv_auth / cv_sid）
+        # - 允许用户粘贴整串 Cookie（里面可能包含 Path/Domain/Expires 等无效属性）
+        # - 允许前面多了空格或大小写混用
+        pairs: list[str] = []
+        for name in ("cv_auth", "cv_sid"):
+            m = re.search(rf"(?:^|;\s*){name}\s*=\s*([^;\s]+)", raw, flags=re.IGNORECASE)
+            if m:
+                pairs.append(f"{name}={m.group(1).strip()}")
+        if pairs:
+            return "; ".join(pairs)
+
+        # 兜底：用户已经提供 key=value 形式（用于兼容自定义/旧后端）
         if "=" in raw:
             return raw
+
+        # 兜底：仅提供值
+        # - 看起来像 JWT/签名 token（通常含 '.'） -> 认为是 cv_auth
+        # - 否则按旧习惯 -> cv_sid
+        if "." in raw:
+            return f"cv_auth={raw}"
         return f"cv_sid={raw}"

@@ -1,6 +1,56 @@
 from __future__ import annotations
 
 
+_YES_TOKENS = {"是", "y", "yes", "1", "开启", "开", "使用"}
+_NO_TOKENS = {"否", "n", "no", "0", "关闭", "关", "不使用"}
+_CUSTOM_TOKENS = {"自定义", "custom"}
+_SKIP_TOKENS = {"跳过", "skip"}
+_KEEP_TOKENS = {"保持", "keep"}
+
+_YES_TOKENS_FOLDED = {x.casefold() for x in _YES_TOKENS}
+_NO_TOKENS_FOLDED = {x.casefold() for x in _NO_TOKENS}
+_CUSTOM_TOKENS_FOLDED = {x.casefold() for x in _CUSTOM_TOKENS}
+_SKIP_TOKENS_FOLDED = {x.casefold() for x in _SKIP_TOKENS}
+_KEEP_TOKENS_FOLDED = {x.casefold() for x in _KEEP_TOKENS}
+
+
+def normalize_command_text(text: str) -> str:
+    """规范化交互式短指令输入。
+
+    - 去掉前导 / 或 ／
+    - 去掉首尾空白
+    - 不做 lower/casefold（由 parse_command_choice 统一处理）
+    """
+
+    return (text or "").strip().lstrip("/／").strip()
+
+
+def parse_command_choice(text: str) -> str | None:
+    """解析交互式输入为标准 choice。
+
+    Returns:
+        "yes" | "no" | "custom" | "skip" | "keep" | None
+    """
+
+    t = normalize_command_text(text)
+    if not t:
+        return None
+    t2 = t.casefold()
+
+    if t2 in _YES_TOKENS_FOLDED:
+        return "yes"
+    if t2 in _NO_TOKENS_FOLDED:
+        return "no"
+    if t2 in _CUSTOM_TOKENS_FOLDED:
+        return "custom"
+    if t2 in _SKIP_TOKENS_FOLDED:
+        return "skip"
+    if t2 in _KEEP_TOKENS_FOLDED:
+        return "keep"
+
+    return None
+
+
 def normalize_one_line(s: str) -> str:
     s = (s or "").replace("\r\n", "\n").replace("\r", "\n")
     return " ".join([p for p in s.split("\n") if p.strip()])

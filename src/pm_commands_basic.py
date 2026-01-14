@@ -12,7 +12,13 @@ from astrbot.core.utils.session_waiter import SessionController, session_waiter
 
 from .models import EMPTY_PERSONA_NAME
 from .session_state import PersonaEditStage, PersonaEditState
-from .text_utils import is_finish_edit_command, normalize_one_line, split_long_text, truncate_text
+from .text_utils import (
+    is_finish_edit_command,
+    normalize_one_line,
+    parse_command_choice,
+    split_long_text,
+    truncate_text,
+)
 
 
 def _get_command_token(message_str: str) -> str:
@@ -76,11 +82,8 @@ async def _advance_add_persona_session(
         controller.keep(timeout=timeout, reset_timeout=True)
 
     async def _handle_tags() -> None:
-        t = text.lstrip("/／").strip()
-        if t == "跳过":
-            state.tags = []
-        else:
-            state.tags = [x.strip() for x in text.split() if x.strip()]
+        choice = parse_command_choice(text)
+        state.tags = [] if choice == "skip" else [x.strip() for x in text.split() if x.strip()]
         state.stage = PersonaEditStage.WRAPPER
         await e.send(
             e.plain_result(
@@ -94,22 +97,22 @@ async def _advance_add_persona_session(
         controller.keep(timeout=timeout, reset_timeout=True)
 
     async def _handle_wrapper() -> None:
-        t = text.lstrip("/／").strip().lower()
-        if t in {"是", "y", "yes", "1", "开启", "开", "使用"}:
+        choice = parse_command_choice(text)
+        if choice == "yes":
             state.use_wrapper = True
             state.wrapper_use_config = True
             state.stage = PersonaEditStage.CLEAN
             await _ask_clean()
             controller.keep(timeout=timeout, reset_timeout=True)
             return
-        if t in {"否", "n", "no", "0", "自定义", "custom"}:
+        if choice in {"no", "custom"}:
             state.use_wrapper = True
             state.wrapper_use_config = False
             state.stage = PersonaEditStage.WRAPPER_PREFIX
             await e.send(e.plain_result("请输入前置提示词（输入 /跳过 表示留空）"))
             controller.keep(timeout=timeout, reset_timeout=True)
             return
-        if t in {"跳过", "skip"}:
+        if choice == "skip":
             state.use_wrapper = False
             state.stage = PersonaEditStage.CLEAN
             await _ask_clean()
@@ -119,29 +122,29 @@ async def _advance_add_persona_session(
         controller.keep(timeout=timeout, reset_timeout=True)
 
     async def _handle_wrapper_prefix() -> None:
-        t = text.lstrip("/／").strip()
-        state.wrapper_prefix = "" if t == "跳过" else (getattr(e, "message_str", "") or "").strip()
+        raw = (getattr(e, "message_str", "") or "").strip()
+        state.wrapper_prefix = "" if parse_command_choice(raw) == "skip" else raw
         state.stage = PersonaEditStage.WRAPPER_SUFFIX
         await e.send(e.plain_result("请输入后置提示词（输入 /跳过 表示留空）"))
         controller.keep(timeout=timeout, reset_timeout=True)
 
     async def _handle_wrapper_suffix() -> None:
-        t = text.lstrip("/／").strip()
-        state.wrapper_suffix = "" if t == "跳过" else (getattr(e, "message_str", "") or "").strip()
+        raw = (getattr(e, "message_str", "") or "").strip()
+        state.wrapper_suffix = "" if parse_command_choice(raw) == "skip" else raw
         state.stage = PersonaEditStage.CLEAN
         await _ask_clean()
         controller.keep(timeout=timeout, reset_timeout=True)
 
     async def _handle_clean() -> None:
-        t = text.lstrip("/／").strip().lower()
-        if t in {"是", "y", "yes", "1", "开启", "开", "使用"}:
+        choice = parse_command_choice(text)
+        if choice == "yes":
             state.clean_use_config = True
             state.clean_regex = ""
             state.stage = PersonaEditStage.CONTENT
             await e.send(e.plain_result("请输入角色设定"))
             controller.keep(timeout=timeout, reset_timeout=True)
             return
-        if t in {"否", "n", "no", "0", "自定义", "custom"}:
+        if choice in {"no", "custom"}:
             state.clean_use_config = False
             state.stage = PersonaEditStage.CLEAN_REGEX
             await e.send(
@@ -152,7 +155,7 @@ async def _advance_add_persona_session(
             )
             controller.keep(timeout=timeout, reset_timeout=True)
             return
-        if t in {"跳过", "skip"}:
+        if choice == "skip":
             state.clean_use_config = False
             state.clean_regex = ""
             state.stage = PersonaEditStage.CONTENT
@@ -163,8 +166,7 @@ async def _advance_add_persona_session(
         controller.keep(timeout=timeout, reset_timeout=True)
 
     async def _handle_clean_regex() -> None:
-        t = text.lstrip("/／").strip()
-        if t in {"跳过", "skip"}:
+        if parse_command_choice(text) == "skip":
             state.clean_regex = ""
             state.stage = PersonaEditStage.CONTENT
             await e.send(e.plain_result("请输入角色设定"))
@@ -234,7 +236,7 @@ async def _advance_edit_persona_session(
         else:
             state.intro = text
         state.stage = PersonaEditStage.TAGS
-        current_tags = " ".join(state.tags) if state.tags else "无"
+        current_tags = " ".join([f"[{t}]" for t in state.tags]) if state.tags else "无"
         await e.send(
             e.plain_result(
                 f"当前标签：{current_tags}\n"
@@ -264,12 +266,11 @@ async def _advance_edit_persona_session(
         controller.keep(timeout=timeout, reset_timeout=True)
 
     async def _handle_wrapper() -> None:
-        t = text_cmd.lower()
-        if t == "保持":
+        if parse_command_choice(text_cmd) == "keep" or text_cmd == "保持":
             pass
-        elif t in {"是", "y", "yes", "1", "开启", "开", "使用"}:
+        elif parse_command_choice(text_cmd) == "yes":
             state.use_wrapper = True
-        elif t in {"否", "n", "no", "0", "关闭", "关", "不使用"}:
+        elif parse_command_choice(text_cmd) == "no":
             state.use_wrapper = False
         else:
             await e.send(e.plain_result("请输入：/是 或 /否（输入 /保持 则不修改）"))
@@ -643,7 +644,7 @@ async def view_persona(self, event: AstrMessageEvent, name: GreedyStr):
         return
 
     # 构建人设信息：人设类型、名称、标签、完整简介
-    tags_str = "、".join(persona.tags) if persona.tags else "无"
+    tags_str = " ".join([f"[{t}]" for t in persona.tags]) if persona.tags else "无"
     user_name = str(event.get_sender_name())
 
     base_info = (f"【角色】{name}\n" f"标签: {tags_str}")
