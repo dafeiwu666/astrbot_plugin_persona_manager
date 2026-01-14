@@ -11,7 +11,7 @@ from .models import EMPTY_PERSONA_NAME
 def _safe_delattr(obj: object, name: str) -> None:
     try:
         delattr(obj, name)
-    except Exception:
+    except AttributeError:
         return
 
 

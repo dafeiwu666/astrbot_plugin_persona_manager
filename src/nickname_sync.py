@@ -3,13 +3,6 @@ from __future__ import annotations
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent
 
-try:  # 可选依赖：仅在安装 aiocqhttp 适配器时可用
-    from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import (
-        AiocqhttpMessageEvent,
-    )
-except Exception:  # pragma: no cover
-    AiocqhttpMessageEvent = None  # type: ignore
-
 from .models import EMPTY_PERSONA_NAME
 
 
