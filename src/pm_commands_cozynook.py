@@ -4,6 +4,7 @@ import asyncio
 import ipaddress
 import json
 import re
+import queue
 import socket
 import sys
 import textwrap
@@ -189,10 +190,35 @@ async def _download_to_file_async(
                             if chunk:
                                 await f.write(chunk)
                 else:
-                    with tmp.open("wb") as f:
-                        async for chunk in resp.content.iter_chunked(64 * 1024):
-                            if chunk:
-                                f.write(chunk)
+                    q: "queue.Queue[bytes | None]" = queue.Queue(maxsize=64)
+
+                    def _writer() -> None:
+                        with tmp.open("wb") as f:
+                            while True:
+                                item = q.get()
+                                if item is None:
+                                    break
+                                f.write(item)
+
+                    t = asyncio.to_thread(_writer)
+
+                    async def _feed() -> None:
+                        try:
+                            async for chunk in resp.content.iter_chunked(64 * 1024):
+                                if not chunk:
+                                    continue
+                                try:
+                                    q.put_nowait(chunk)
+                                except queue.Full:
+                                    # 让出事件循环，等待 writer 消费
+                                    await asyncio.to_thread(q.put, chunk)
+                        finally:
+                            try:
+                                q.put_nowait(None)
+                            except queue.Full:
+                                await asyncio.to_thread(q.put, None)
+
+                    await asyncio.gather(t, _feed())
                 break
         else:
             raise RuntimeError(f"下载重定向过多，已放弃：{final_url}")
@@ -366,7 +392,7 @@ async def _is_safe_download_host(host: str) -> bool:
 async def _delete_file_later(path: Path, delay_sec: int) -> None:
     try:
         await asyncio.sleep(max(int(delay_sec), 0))
-        path.unlink(missing_ok=True)
+        await asyncio.to_thread(path.unlink, missing_ok=True)
     except Exception:
         return
 
@@ -1599,7 +1625,7 @@ async def _build_import_content_from_files(
     parts: list[str] = []
     base_dir = StarTools.get_data_dir("astrbot_plugin_persona_manager") / "cozynook_cache" / "downloads"
     base_dir.mkdir(parents=True, exist_ok=True)
-    _prune_cache_dir(base_dir)
+    await asyncio.to_thread(_prune_cache_dir, base_dir)
 
     if not _AIOHTTP_AVAILABLE or aiohttp is None:
         # 没有 aiohttp 时导入附件文本直接跳过
@@ -1674,7 +1700,7 @@ async def _send_files(
 ):
     base_dir = StarTools.get_data_dir("astrbot_plugin_persona_manager") / "cozynook_cache" / "exports"
     base_dir.mkdir(parents=True, exist_ok=True)
-    _prune_cache_dir(base_dir)
+    await asyncio.to_thread(_prune_cache_dir, base_dir)
 
     close_session = False
     if session is None and _AIOHTTP_AVAILABLE and aiohttp is not None:

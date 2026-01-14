@@ -340,7 +340,13 @@ class Main(Star):
             keys.append(origin)
 
         # 兼容之前插件内调试版本的 fallback key 格式
-        platform = self._safe_str(getattr(event, "get_platform_id", lambda: "")()).lower()
+        platform = ""
+        get_pid = getattr(event, "get_platform_id", None)
+        if callable(get_pid):
+            try:
+                platform = self._safe_str(get_pid()).lower()
+            except Exception as ex:
+                logger.debug(f"角色社区化人设管理 get_platform_id 调用异常：{ex!r}")
         if origin and platform:
             keys.append(f"{platform}:origin:{origin}")
 
