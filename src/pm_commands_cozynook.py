@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import json
+import random
 import re
 import queue
 import socket
@@ -44,6 +45,7 @@ from .text_utils import normalize_command_text, normalize_one_line, parse_comman
 
 
 _ULA_RE = re.compile(r"^ula-[A-Za-z0-9]{16}$", re.IGNORECASE)
+_XB_RE = re.compile(r"^xb-[A-Za-z0-9]{16}$", re.IGNORECASE)
 
 _TEXT_EXTS = {
     ".txt",
@@ -67,8 +69,8 @@ _CACHE_PRUNE_MAX_FILES = 300
 COZYNOOK_SITE_URL = "https://c0zynook.com"
 COZYNOOK_API_BASE = f"{COZYNOOK_SITE_URL}/api"
 
-# 角色小屋市场页：默认指向固定帖子密码
-DEFAULT_MARKET_POST_PWD = "ULA-882BC987FF367255"
+# 角色小屋：指定频道分享码（不在 conf 显示）。
+DEFAULT_CHANNEL_INVITE_CODE = "XB-1F0C5B453D6E109B"
 
 
 _PIL_MISSING_WARNED = False
@@ -77,6 +79,10 @@ _FONT_MISSING_WARNED = False
 
 def _get_user_agent() -> str:
     return "astrbot-plugin-persona-manager/1.0"
+
+
+def _is_xb(s: str) -> bool:
+    return bool(_XB_RE.match(str(s or "").strip()))
 
 
 async def _http_get_json_with_status_async(
@@ -122,6 +128,72 @@ async def _http_get_json_with_status_async(
                 await session.close()
             except Exception:
                 pass
+
+
+async def _http_post_json_with_status_async(
+    url: str,
+    body: dict[str, Any],
+    *,
+    cookie_header: str = "",
+    timeout_sec: int = 20,
+    session: Any = None,
+) -> tuple[int, dict[str, Any]]:
+    """异步 POST JSON（依赖 aiohttp）。"""
+
+    if not _AIOHTTP_AVAILABLE or aiohttp is None:
+        logger.error("角色小屋：缺少 aiohttp，无法请求接口")
+        return 0, {}
+
+    headers = {"User-Agent": _get_user_agent()}
+    if cookie_header:
+        headers["Cookie"] = cookie_header
+
+    timeout = aiohttp.ClientTimeout(total=max(int(timeout_sec), 1))
+    close_session = False
+    try:
+        if session is None:
+            session = aiohttp.ClientSession(timeout=timeout)
+            close_session = True
+
+        async with session.post(_normalize_url(url), json=body, headers=headers, timeout=timeout) as resp:
+            status = int(resp.status)
+            try:
+                data = await resp.json(content_type=None)
+            except Exception:
+                raw = await resp.read()
+                try:
+                    data = json.loads(raw.decode("utf-8", errors="replace"))
+                except Exception:
+                    data = {}
+            return status, data if isinstance(data, dict) else {}
+    except Exception:
+        return 0, {}
+    finally:
+        if close_session and session is not None:
+            try:
+                await session.close()
+            except Exception:
+                pass
+
+
+async def _cozyverse_join_channel_by_invite_async(
+    *,
+    code: str,
+    cookie: str,
+    session: Any,
+) -> tuple[int, dict[str, Any]]:
+    code_s = str(code or "").strip().lower()
+    url = f"{COZYNOOK_API_BASE}/invites/join"
+    return await _http_post_json_with_status_async(url, {"code": code_s}, cookie_header=cookie, session=session)
+
+
+async def _cozyverse_fetch_bootstrap_async(
+    *,
+    cookie: str,
+    session: Any,
+) -> tuple[int, dict[str, Any]]:
+    url = f"{COZYNOOK_API_BASE}/bootstrap"
+    return await _http_get_json_with_status_async(url, cookie_header=cookie, session=session)
 
 
 async def _download_to_file_async(
@@ -1073,8 +1145,203 @@ async def _cozyverse_fetch_latest_comments_v1_async(
     return status2 or status, []
 
 
+async def cozynook_draw_channel_cards(self, event: AstrMessageEvent, section_name: Any = ""):
+    """/角色小屋：从指定分享码频道随机抽卡片，并输出标题 + 密码。
+
+    - /角色小屋：输出分区列表 + 从全频道随机抽取
+    - /角色小屋 分区名：仅从该分区随机抽取
+    """
+
+    err = self._require_access(event)
+    if err:
+        yield event.plain_result(err)
+        return
+
+    # 必须有登录态 Cookie：/invites/join 与 /bootstrap 都需要鉴权才能拿到 posts。
+    cookie = ""
+    try:
+        cookie = self._cfg.cozynook_cookie_header()
+    except Exception:
+        cookie = ""
+
+    if not cookie:
+        yield event.plain_result(
+            "未配置 Cozyverse 登录态 Cookie。\n"
+            "请在插件配置里填写 `cozynook_sid_cookie`：可填 `cv_auth=...` 或 `cv_sid=...`（从浏览器 Cookie 复制）。"
+        )
+        return
+
+    section_query = normalize_one_line(str(section_name or "")).strip()
+
+    try:
+        pick_n = int(getattr(self._cfg, "cozynook_channel_cards_pick", 15) or 15)
+    except Exception:
+        pick_n = 15
+    if pick_n < 1:
+        pick_n = 1
+    if pick_n > 30:
+        pick_n = 30
+
+    code = str(DEFAULT_CHANNEL_INVITE_CODE or "").strip().lower()
+    if not _is_xb(code):
+        yield event.plain_result("角色小屋分享码配置无效（应为 xb-16位）。")
+        return
+
+    if not _AIOHTTP_AVAILABLE or aiohttp is None:
+        yield event.plain_result("缺少依赖 aiohttp，无法访问角色小屋接口。请安装：pip install aiohttp")
+        return
+
+    session = None
+    close_session = False
+    try:
+        timeout = aiohttp.ClientTimeout(total=max(int(getattr(self._cfg, "cozynook_timeout_sec", 20) or 20), 1))
+        headers = {"User-Agent": _get_user_agent()}
+        if cookie:
+            headers["Cookie"] = cookie
+
+        session = aiohttp.ClientSession(timeout=timeout, headers=headers)
+        close_session = True
+
+        j_status, j_data = await _cozyverse_join_channel_by_invite_async(code=code, cookie=cookie, session=session)
+        if not (isinstance(j_data, dict) and j_data.get("ok")):
+            if int(j_status or 0) == 401:
+                yield event.plain_result("登录态已失效：已退出。请更新 `cozynook_sid_cookie` 后重试。")
+                return
+            yield event.plain_result("加入频道失败：已退出。")
+            return
+
+        try:
+            channel_id = int(j_data.get("channelId") or 0)
+        except Exception:
+            channel_id = 0
+        if channel_id <= 0:
+            yield event.plain_result("加入频道失败：已退出。")
+            return
+
+        b_status, b_data = await _cozyverse_fetch_bootstrap_async(cookie=cookie, session=session)
+        if not (isinstance(b_data, dict) and b_data.get("ok")):
+            if int(b_status or 0) == 401:
+                yield event.plain_result("登录态已失效：已退出。请更新 `cozynook_sid_cookie` 后重试。")
+                return
+            yield event.plain_result("拉取频道内容失败：已退出。")
+            return
+
+        channels = b_data.get("channels")
+        if not isinstance(channels, list):
+            channels = []
+
+        channel_obj: dict[str, Any] | None = None
+        for ch in channels:
+            if not isinstance(ch, dict):
+                continue
+            try:
+                if int(ch.get("id") or 0) == int(channel_id):
+                    channel_obj = ch
+                    break
+            except Exception:
+                continue
+
+        sections = []
+        if isinstance(channel_obj, dict):
+            s = channel_obj.get("sections")
+            if isinstance(s, list):
+                sections = [x for x in s if isinstance(x, dict)]
+
+        section_name_list = []
+        section_id_by_name: dict[str, int] = {}
+        for s in sections:
+            name = normalize_one_line(str(s.get("name") or "")).strip()
+            try:
+                sid = int(s.get("id") or 0)
+            except Exception:
+                sid = 0
+            if not name or sid <= 0:
+                continue
+            section_name_list.append(name)
+            section_id_by_name[name.casefold()] = sid
+
+        section_id_filter: int | None = None
+        if section_query:
+            section_id_filter = section_id_by_name.get(section_query.casefold())
+            if not section_id_filter:
+                hint = " / ".join(section_name_list) if section_name_list else "(暂无分区)"
+                yield event.plain_result(
+                    "未找到该分区，已退出。\n"
+                    f"可用分区：{hint}\n"
+                    "用法：/角色小屋 分区名"
+                )
+                return
+
+        posts = b_data.get("posts")
+        if not isinstance(posts, list):
+            posts = []
+
+        in_channel = []
+        for p in posts:
+            if not isinstance(p, dict):
+                continue
+            try:
+                if int(p.get("channelId") or 0) != int(channel_id):
+                    continue
+            except Exception:
+                continue
+            if section_id_filter is not None:
+                try:
+                    if int(p.get("sectionId") or 0) != int(section_id_filter):
+                        continue
+                except Exception:
+                    continue
+            in_channel.append(p)
+
+        with_pwd = []
+        for p in in_channel:
+            pwd = str(p.get("postPwd") or "").strip()
+            if not pwd:
+                continue
+            with_pwd.append(p)
+
+        if not with_pwd:
+            yield event.plain_result(
+                "频道暂无可用卡片（可能卡片未公开密码，或你没有查看权限）。\n"
+                "已退出。"
+            )
+            return
+
+        want = min(int(pick_n), len(with_pwd))
+        chosen = random.sample(with_pwd, want) if len(with_pwd) > want else list(with_pwd)
+
+        lines: list[str] = []
+        if not section_query:
+            if section_name_list:
+                lines.append("【分区】" + " / ".join(section_name_list))
+                lines.append("用法：/角色小屋 分区名  （仅从该分区随机）")
+            else:
+                lines.append("【分区】(暂无分区)")
+        else:
+            lines.append(f"【分区】{section_query}")
+
+        lines.append(f"【角色小屋】抽到 {want} 张卡片")
+        for i, p in enumerate(chosen, 1):
+            title = str(p.get("title") or "").strip() or "(无标题)"
+            pwd = str(p.get("postPwd") or "").strip()
+            lines.append(f"{i}. {title} — {pwd}")
+
+        if want < int(pick_n):
+            lines.append(f"（本次仅抽到 {want} 张：频道内可见密码的卡片不足 {pick_n} 张）")
+
+        lines.append("\n可用指令：/获取卡片 ula-xxxx（查看帖子） /导入角色 ula-xxxx（导入）")
+
+        yield event.plain_result("\n".join(lines))
+    finally:
+        if close_session and session is not None:
+            try:
+                await session.close()
+            except Exception:
+                pass
+
+
 async def cozynook_get(self, event: AstrMessageEvent, arg, *, allow_import: bool, mode: str | None = None):
-    """/角色小屋 与 /查询密码 的统一入口。
+    """/获取卡片 与 /导入角色 /导出角色 的统一入口。
 
     mode:
       - None: 交互式询问导入/导出
@@ -1089,15 +1356,12 @@ async def cozynook_get(self, event: AstrMessageEvent, arg, *, allow_import: bool
 
     raw = str(arg or "").strip()
     if not raw:
-        # /角色小屋：允许无参数打开市场帖；/查询密码：必须指定 ULA。
-        if allow_import:
-            yield event.plain_result("用法：/查询密码 ula-XXXXXXXXXXXXXXXX（16位）")
-            return
-        pwd = DEFAULT_MARKET_POST_PWD
-    else:
-        pwd = raw
+        yield event.plain_result("用法：/获取卡片 ula-XXXXXXXXXXXXXXXX（16位）")
+        return
+
+    pwd = raw
     if not _is_ula(pwd):
-        yield event.plain_result("用法：/查询密码 ula-XXXXXXXXXXXXXXXX（16位）")
+        yield event.plain_result("用法：/获取卡片 ula-XXXXXXXXXXXXXXXX（16位）")
         return
 
     cookie = ""
@@ -1263,85 +1527,6 @@ async def cozynook_get(self, event: AstrMessageEvent, arg, *, allow_import: bool
         yield event.chain_result([Comp.Nodes(nodes)])
 
     mode_norm = (mode or "").strip().lower()
-    if not allow_import:
-        # /角色小屋：默认仅查看；只有用户明确输入 /导出 才触发导出。
-        if mode_norm in {"export", "导出"}:
-            async for r in _handle_export_flow(
-                self,
-                event,
-                pwd=pwd,
-                title=title,
-                author=author,
-                intro=intro,
-                content=content,
-                files=files,
-                cookie=cookie,
-                base_url=COZYNOOK_SITE_URL,
-                session=session,
-            ):
-                yield r
-            if close_session and session is not None:
-                try:
-                    await session.close()
-                except Exception:
-                    pass
-            return
-
-        yield event.plain_result("如需导出附件/内容，请输入：/导出")
-
-        timeout = int(getattr(self._cfg, "session_timeout_sec", 300) or 300)
-        initial_sender_id = str(event.get_sender_id())
-        initial_event = event
-
-        @session_waiter(timeout=timeout, record_history_chains=False)
-        async def waiter(controller: SessionController, e: AstrMessageEvent):
-            if self._is_self_message_event(e) or self._is_empty_echo_event(e):
-                controller.keep(timeout=timeout, reset_timeout=True)
-                return
-            if str(e.get_sender_id()) != initial_sender_id:
-                controller.keep(timeout=timeout, reset_timeout=True)
-                return
-            if e is initial_event:
-                controller.keep(timeout=timeout, reset_timeout=True)
-                return
-
-            e.stop_event()
-
-            text = (e.message_str or "").strip().lstrip("/／").strip()
-            if text in {"导出", "export"}:
-                controller.stop()
-                async for rr in _handle_export_flow(
-                    self,
-                    e,
-                    pwd=pwd,
-                    title=title,
-                    author=author,
-                    intro=intro,
-                    content=content,
-                    files=files,
-                    cookie=cookie,
-                    base_url=COZYNOOK_SITE_URL,
-                    session=session,
-                ):
-                    await e.send(rr)
-                return
-
-            # 未明确选择 /导出：立刻结束会话，避免误吞其它输入造成反复提示。
-            await e.send(e.plain_result("未发送 /导出，已退出。需要导出请重新发送：/角色小屋"))
-            controller.stop()
-            return
-
-        try:
-            await waiter(event)
-        except TimeoutError:
-            yield event.plain_result("会话超时，已退出导出选择。")
-        finally:
-            if close_session and session is not None:
-                try:
-                    await session.close()
-                except Exception:
-                    pass
-        return
     if mode_norm in {"import", "导入"}:
         async for r in _handle_import_flow(
             self,
@@ -1428,7 +1613,7 @@ async def cozynook_get(self, event: AstrMessageEvent, arg, *, allow_import: bool
         # 未明确选择 /导入 或 /导出：立刻结束会话并终止传播。
         await e.send(
             e.plain_result(
-                "未选择操作，已退出。需要导入/导出请重新发送：/查询密码 ula-xxxx\n"
+                "未选择操作，已退出。需要导入/导出请重新发送：/获取卡片 ula-xxxx\n"
                 "或直接用：/导入角色 ula-xxxx /导出角色 ula-xxxx"
             )
         )

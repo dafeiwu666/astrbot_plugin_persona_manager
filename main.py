@@ -744,15 +744,14 @@ class Main(Star):
             yield r
 
     @filter.command("角色小屋")
-    async def cozynook_market(self, event: AstrMessageEvent):
-        """平台消息下发时：打开 CozyNook 角色小屋市场帖（默认仅查看，输入 /导出 才导出）。"""
-        # CozyNook 市场页：只允许导出（但不默认触发导出）
-        async for r in _pm_commands_cozynook.cozynook_get(self, event, "", allow_import=False):
+    async def cozynook_market(self, event: AstrMessageEvent, 分区: GreedyStr = GreedyStr("")):
+        """平台消息下发时：从指定分享码频道随机抽取卡片（可选按分区）。"""
+        async for r in _pm_commands_cozynook.cozynook_draw_channel_cards(self, event, 分区):
             yield r
 
-    @filter.command("查询密码")
-    async def cozynook_query_pwd(self, event: AstrMessageEvent, 密码或ULA: GreedyStr = GreedyStr("")):
-        """平台消息下发时：按 ULA(密码) 打开 CozyNook 帖子（可导入或导出）。"""
+    @filter.command("获取卡片")
+    async def cozynook_get_card(self, event: AstrMessageEvent, 密码或ULA: GreedyStr = GreedyStr("")):
+        """平台消息下发时：按 ULA(密码) 打开 CozyNook 卡片/帖子（可导入或导出）。"""
         # 指定 ula-xxxx：允许导入或导出（默认不触发，需选择 /导入 或 /导出）
         async for r in _pm_commands_cozynook.cozynook_get(self, event, 密码或ULA, allow_import=True):
             yield r

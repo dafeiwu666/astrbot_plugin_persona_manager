@@ -63,6 +63,12 @@
     "description": "角色小屋使用图片预览渲染",
     "hint": "开启后将尝试把帖子内容渲染成预览图并发送（需要可选依赖 Pillow 与可用字体；若渲染失败会自动回退为合并转发文本）。关闭则使用合并转发文本展示。"
   },
+  "cozynook_channel_cards_pick": {
+    "type": "int",
+    "default": 15,
+    "description": "角色小屋频道抽卡数量",
+    "hint": "从指定分享码频道随机抽取卡片数量（1-30，最大 30）。"
+  },
   "cozynook_preview_font_path": {
     "type": "text",
     "default": "",

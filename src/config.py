@@ -42,6 +42,9 @@ class PersonaPluginConfig(BaseModel):
     # - True: 尝试渲染预览图并发送（需要可选依赖 Pillow 与可用字体；失败会回退文本）
     cozynook_use_preview_image: bool = False
 
+    # CozyNook：/角色小屋 从指定频道随机抽卡数量（1-30）。
+    cozynook_channel_cards_pick: int = 15
+
     # CozyNook：预览图字体路径（可选）。
     # 仅在未来启用图片预览渲染时使用；留空则使用内置候选路径探测。
     cozynook_preview_font_path: str = ""
@@ -135,6 +138,21 @@ class PersonaPluginConfig(BaseModel):
             n = 0
         if n > 50:
             n = 50
+        return n
+
+    @field_validator("cozynook_channel_cards_pick", mode="before")
+    @classmethod
+    def _coerce_cozynook_channel_cards_pick(cls, v: Any) -> int:
+        if isinstance(v, dict) and "value" in v:
+            v = v.get("value")
+        try:
+            n = int(v)
+        except Exception:
+            n = 15
+        if n < 1:
+            n = 1
+        if n > 30:
+            n = 30
         return n
 
     @classmethod
