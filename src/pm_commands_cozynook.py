@@ -18,6 +18,14 @@ except Exception:  # pragma: no cover
     aiohttp = None  # type: ignore[assignment]
     _AIOHTTP_AVAILABLE = False
 
+try:
+    import aiofiles  # type: ignore
+
+    _AIOFILES_AVAILABLE = True
+except Exception:  # pragma: no cover
+    aiofiles = None  # type: ignore[assignment]
+    _AIOFILES_AVAILABLE = False
+
 import astrbot.api.message_components as Comp
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent
@@ -58,6 +66,7 @@ DEFAULT_MARKET_POST_PWD = "ULA-882BC987FF367255"
 
 
 _PIL_MISSING_WARNED = False
+_FONT_MISSING_WARNED = False
 
 
 def _get_user_agent() -> str:
@@ -88,7 +97,7 @@ async def _http_get_json_with_status_async(
             session = aiohttp.ClientSession(timeout=timeout)
             close_session = True
 
-        async with session.get(_normalize_url(url), headers=headers) as resp:
+        async with session.get(_normalize_url(url), headers=headers, timeout=timeout) as resp:
             status = int(resp.status)
             try:
                 data = await resp.json(content_type=None)
@@ -138,12 +147,18 @@ async def _download_to_file_async(
             session = aiohttp.ClientSession(timeout=timeout)
             close_session = True
 
-        async with session.get(_normalize_url(final_url), headers=headers) as resp:
+        async with session.get(_normalize_url(final_url), headers=headers, timeout=timeout) as resp:
             resp.raise_for_status()
-            with tmp.open("wb") as f:
-                async for chunk in resp.content.iter_chunked(64 * 1024):
-                    if chunk:
-                        f.write(chunk)
+            if _AIOFILES_AVAILABLE and aiofiles is not None:
+                async with aiofiles.open(tmp, "wb") as f:  # type: ignore[attr-defined]
+                    async for chunk in resp.content.iter_chunked(64 * 1024):
+                        if chunk:
+                            await f.write(chunk)
+            else:
+                with tmp.open("wb") as f:
+                    async for chunk in resp.content.iter_chunked(64 * 1024):
+                        if chunk:
+                            f.write(chunk)
         tmp.replace(dest)
         return dest
     finally:
@@ -359,13 +374,15 @@ def _pick_font_path(preferred: str | None = None) -> str | None:
         "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
         "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        # macOS 常见
+        "/System/Library/Fonts/PingFang.ttc",
+        "/System/Library/Fonts/STHeiti Light.ttc",
+        "/Library/Fonts/Arial Unicode.ttf",
         # Windows 常见
         "C:/Windows/Fonts/msyh.ttc",
         "C:/Windows/Fonts/msyh.ttf",
         "C:/Windows/Fonts/simhei.ttf",
         "C:/Windows/Fonts/simsun.ttc",
-        # 兜底
-        "arial.ttf",
     ]
 
     for p in candidates:
@@ -374,8 +391,7 @@ def _pick_font_path(preferred: str | None = None) -> str | None:
                 return p
         except Exception:
             continue
-    # 对于像 "arial.ttf" 这种仅靠 fontconfig 的名字，不能用 exists 判断
-    return "arial.ttf"
+    return None
 
 
 def _wrap_lines(text: str, *, width: int, max_lines: int) -> list[str]:
@@ -446,7 +462,13 @@ def _render_post_preview_image(
 
     font_path = _pick_font_path(font_path_preferred)
     if not font_path:
-        logger.debug("CozyNook 预览图字体未找到，已跳过渲染。")
+        global _FONT_MISSING_WARNED
+        if not _FONT_MISSING_WARNED:
+            _FONT_MISSING_WARNED = True
+            logger.info(
+                "CozyNook 预览图渲染失败：未找到可用字体。\n"
+                "请在配置中设置 `cozynook_preview_font_path` 指向一个字体文件（如 Windows: C:/Windows/Fonts/msyh.ttc）。"
+            )
         return None
 
     try:
@@ -742,8 +764,10 @@ async def cozynook_get(self, event: AstrMessageEvent, arg, *, allow_import: bool
     post_id = 0
     comments: list[str] = []
 
+    session = None
+    close_session = False
     try:
-        # 复用同一个 aiohttp session：获取帖子 + 拉评论共享连接池
+        # 复用同一个 aiohttp session：获取帖子 + 拉评论 + 后续导入/导出下载共享连接池
         if not _AIOHTTP_AVAILABLE or aiohttp is None:
             yield event.plain_result("缺少依赖 aiohttp，无法访问角色小屋接口。请安装：pip install aiohttp")
             return
@@ -752,28 +776,35 @@ async def cozynook_get(self, event: AstrMessageEvent, arg, *, allow_import: bool
         headers = {"User-Agent": _get_user_agent()}
         if cookie:
             headers["Cookie"] = cookie
-        async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
-            status, post = await _cozyverse_fetch_post_by_password_async(pwd=pwd, cookie=cookie, session=session)
 
-            # 拉取评论需要复用连接池，因此必须在 session 生命周期内完成。
-            if isinstance(post, dict):
+        session = aiohttp.ClientSession(timeout=timeout, headers=headers)
+        close_session = True
+
+        status, post = await _cozyverse_fetch_post_by_password_async(pwd=pwd, cookie=cookie, session=session)
+
+        if isinstance(post, dict):
+            try:
+                post_id = int(post.get("id") or 0)
+            except Exception:
+                post_id = 0
+            if post_id > 0 and take > 0:
                 try:
-                    post_id = int(post.get("id") or 0)
+                    _c_status, comments = await _cozyverse_fetch_latest_comments_v1_async(
+                        post_id=post_id,
+                        cookie=cookie,
+                        take=take,
+                        session=session,
+                    )
                 except Exception:
-                    post_id = 0
-                if post_id > 0 and take > 0:
-                    try:
-                        _c_status, comments = await _cozyverse_fetch_latest_comments_v1_async(
-                            post_id=post_id,
-                            cookie=cookie,
-                            take=take,
-                            session=session,
-                        )
-                    except Exception:
-                        comments = []
+                    comments = []
     except Exception as ex:
         logger.error(f"Cozyverse 拉取失败: {ex!s}")
         yield event.plain_result("Cozyverse 拉取失败，请稍后重试。")
+        if close_session and session is not None:
+            try:
+                await session.close()
+            except Exception:
+                pass
         return
 
     if not post:
@@ -781,6 +812,11 @@ async def cozynook_get(self, event: AstrMessageEvent, arg, *, allow_import: bool
             yield event.plain_result("未获取到帖子内容（密码可能错误或帖子不存在）。")
         else:
             yield event.plain_result("未获取到帖子内容（接口返回异常）。")
+        if close_session and session is not None:
+            try:
+                await session.close()
+            except Exception:
+                pass
         return
 
     title = str(post.get("title") or "").strip()
@@ -866,8 +902,14 @@ async def cozynook_get(self, event: AstrMessageEvent, arg, *, allow_import: bool
             files=files,
             cookie=cookie,
             base_url=COZYNOOK_SITE_URL,
+            session=session,
         ):
             yield r
+        if close_session and session is not None:
+            try:
+                await session.close()
+            except Exception:
+                pass
         return
 
     mode_norm = (mode or "").strip().lower()
@@ -883,8 +925,14 @@ async def cozynook_get(self, event: AstrMessageEvent, arg, *, allow_import: bool
             files=files,
             cookie=cookie,
             base_url=COZYNOOK_SITE_URL,
+            session=session,
         ):
             yield r
+        if close_session and session is not None:
+            try:
+                await session.close()
+            except Exception:
+                pass
         return
 
     yield event.plain_result(
@@ -925,6 +973,7 @@ async def cozynook_get(self, event: AstrMessageEvent, arg, *, allow_import: bool
                 files=files,
                 cookie=cookie,
                 base_url=COZYNOOK_SITE_URL,
+                session=session,
             ):
                 await e.send(rr)
             return
@@ -941,6 +990,7 @@ async def cozynook_get(self, event: AstrMessageEvent, arg, *, allow_import: bool
                 files=files,
                 cookie=cookie,
                 base_url=COZYNOOK_SITE_URL,
+                session=session,
             ):
                 await e.send(rr)
             return
@@ -952,6 +1002,12 @@ async def cozynook_get(self, event: AstrMessageEvent, arg, *, allow_import: bool
         await waiter(event)
     except TimeoutError:
         yield event.plain_result("会话超时，已退出。")
+
+    if close_session and session is not None:
+        try:
+            await session.close()
+        except Exception:
+            pass
 
 
 async def _handle_export_flow(
@@ -966,6 +1022,7 @@ async def _handle_export_flow(
     files: list[CozyPostFile],
     cookie: str,
     base_url: str,
+    session: "aiohttp.ClientSession | None" = None,
 ):
     # 导出流程不再重复发送一遍聊天记录（获取帖子时已发送）。
     if not files:
@@ -1009,7 +1066,7 @@ async def _handle_export_flow(
             return
 
         chosen.sort(key=lambda x: picks.index(x.index))
-        await _send_files(self, e, chosen, cookie=cookie, base_url=base_url)
+        await _send_files(self, e, chosen, cookie=cookie, base_url=base_url, session=session)
         controller.stop()
 
     try:
@@ -1030,6 +1087,7 @@ async def _handle_import_flow(
     files: list[CozyPostFile],
     cookie: str,
     base_url: str,
+    session: "aiohttp.ClientSession | None" = None,
 ):
     timeout = int(getattr(self._cfg, "session_timeout_sec", 300) or 300)
     initial_sender_id = str(event.get_sender_id())
@@ -1332,7 +1390,13 @@ async def _handle_import_flow(
         if opt.get("type") == "file":
             f = opt.get("file")
             if isinstance(f, CozyPostFile):
-                file_text = await _build_import_content_from_files(self, [f], cookie=cookie, base_url=base_url)
+                file_text = await _build_import_content_from_files(
+                    self,
+                    [f],
+                    cookie=cookie,
+                    base_url=base_url,
+                    session=session,
+                )
                 if (file_text or "").strip():
                     imported_parts.append(file_text.strip())
 
@@ -1395,7 +1459,14 @@ def _parse_number_picks(text: str) -> list[int]:
     
 
 
-async def _build_import_content_from_files(self, files: list[CozyPostFile], *, cookie: str, base_url: str) -> str:
+async def _build_import_content_from_files(
+    self,
+    files: list[CozyPostFile],
+    *,
+    cookie: str,
+    base_url: str,
+    session: "aiohttp.ClientSession | None" = None,
+) -> str:
     parts: list[str] = []
     base_dir = StarTools.get_data_dir("astrbot_plugin_persona_manager") / "cozynook_cache" / "downloads"
     base_dir.mkdir(parents=True, exist_ok=True)
@@ -1405,12 +1476,16 @@ async def _build_import_content_from_files(self, files: list[CozyPostFile], *, c
         # 没有 aiohttp 时导入附件文本直接跳过
         return ""
 
-    timeout = aiohttp.ClientTimeout(total=max(int(getattr(self._cfg, "cozynook_timeout_sec", 30) or 30), 1))
-    headers = {"User-Agent": _get_user_agent()}
-    if cookie:
-        headers["Cookie"] = cookie
+    close_session = False
+    if session is None:
+        timeout = aiohttp.ClientTimeout(total=max(int(getattr(self._cfg, "cozynook_timeout_sec", 30) or 30), 1))
+        headers = {"User-Agent": _get_user_agent()}
+        if cookie:
+            headers["Cookie"] = cookie
+        session = aiohttp.ClientSession(timeout=timeout, headers=headers)
+        close_session = True
 
-    async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
+    try:
         for f in files:
             # 按你的要求：导入严格只导入文字，不写入图片/链接占位
             if f.kind == "image":
@@ -1449,22 +1524,37 @@ async def _build_import_content_from_files(self, files: list[CozyPostFile], *, c
                     Path(local).unlink(missing_ok=True)
                 except Exception:
                     pass
+    finally:
+        if close_session and session is not None:
+            try:
+                await session.close()
+            except Exception:
+                pass
 
     return "\n\n".join([p for p in parts if p.strip()])
 
 
-async def _send_files(self, event: AstrMessageEvent, files: list[CozyPostFile], *, cookie: str, base_url: str):
+async def _send_files(
+    self,
+    event: AstrMessageEvent,
+    files: list[CozyPostFile],
+    *,
+    cookie: str,
+    base_url: str,
+    session: "aiohttp.ClientSession | None" = None,
+):
     base_dir = StarTools.get_data_dir("astrbot_plugin_persona_manager") / "cozynook_cache" / "exports"
     base_dir.mkdir(parents=True, exist_ok=True)
     _prune_cache_dir(base_dir)
 
-    session = None
-    if _AIOHTTP_AVAILABLE and aiohttp is not None:
+    close_session = False
+    if session is None and _AIOHTTP_AVAILABLE and aiohttp is not None:
         timeout = aiohttp.ClientTimeout(total=max(int(getattr(self._cfg, "cozynook_timeout_sec", 30) or 30), 1))
         headers = {"User-Agent": _get_user_agent()}
         if cookie:
             headers["Cookie"] = cookie
         session = aiohttp.ClientSession(timeout=timeout, headers=headers)
+        close_session = True
 
     try:
         for f in files:
@@ -1524,7 +1614,7 @@ async def _send_files(self, event: AstrMessageEvent, files: list[CozyPostFile], 
             except Exception:
                 await event.send(event.plain_result(f"文件：{f.name}\n{_normalize_url(f.url)}"))
     finally:
-        if session is not None:
+        if close_session and session is not None:
             try:
                 await session.close()
             except Exception:
