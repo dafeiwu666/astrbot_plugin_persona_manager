@@ -51,6 +51,101 @@ COZYNOOK_API_BASE = f"{COZYNOOK_SITE_URL}/api"
 DEFAULT_MARKET_POST_PWD = "ULA-882BC987FF367255"
 
 
+_PIL_MISSING_WARNED = False
+
+
+def _get_user_agent() -> str:
+    return "astrbot-plugin-persona-manager/1.0"
+
+
+async def _http_get_json_with_status_async(
+    url: str,
+    *,
+    cookie_header: str = "",
+    timeout_sec: int = 20,
+) -> tuple[int, dict[str, Any]]:
+    """异步获取 JSON：优先 aiohttp，缺失时回退 urllib（通过 to_thread）。"""
+
+    try:
+        import aiohttp  # type: ignore
+    except Exception:
+        return await asyncio.to_thread(
+            _http_get_json_with_status,
+            url,
+            cookie_header=cookie_header,
+            timeout_sec=timeout_sec,
+        )
+
+    headers = {"User-Agent": _get_user_agent()}
+    if cookie_header:
+        headers["Cookie"] = cookie_header
+
+    timeout = aiohttp.ClientTimeout(total=max(int(timeout_sec), 1))
+    try:
+        async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
+            async with session.get(_normalize_url(url)) as resp:
+                status = int(resp.status)
+                try:
+                    data = await resp.json(content_type=None)
+                except Exception:
+                    raw = await resp.read()
+                    try:
+                        data = json.loads(raw.decode("utf-8", errors="replace"))
+                    except Exception:
+                        data = {}
+                return status, data if isinstance(data, dict) else {}
+    except Exception:
+        return 0, {}
+
+
+async def _download_to_file_async(
+    url: str,
+    *,
+    dest: Path,
+    cookie_header: str = "",
+    timeout_sec: int = 30,
+    base_url: str | None = None,
+) -> Path:
+    """异步下载文件：优先 aiohttp 流式写盘，缺失时回退 urllib（通过 to_thread）。"""
+
+    try:
+        import aiohttp  # type: ignore
+    except Exception:
+        return await asyncio.to_thread(
+            _download_to_file,
+            url,
+            dest=dest,
+            cookie_header=cookie_header,
+            timeout_sec=timeout_sec,
+            base_url=base_url,
+        )
+
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    final_url = _resolve_url(url, base=base_url or COZYNOOK_SITE_URL)
+
+    headers = {"User-Agent": _get_user_agent()}
+    if cookie_header:
+        headers["Cookie"] = cookie_header
+
+    timeout = aiohttp.ClientTimeout(total=max(int(timeout_sec), 1))
+    tmp = dest.with_name(dest.name + ".part")
+    try:
+        async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
+            async with session.get(_normalize_url(final_url)) as resp:
+                resp.raise_for_status()
+                with tmp.open("wb") as f:
+                    async for chunk in resp.content.iter_chunked(64 * 1024):
+                        if chunk:
+                            f.write(chunk)
+        tmp.replace(dest)
+        return dest
+    finally:
+        try:
+            tmp.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+
 @dataclass
 class CozyPostFile:
     index: int
@@ -241,7 +336,7 @@ def _http_get_json(url: str, *, cookie_header: str = "", timeout_sec: int = 20) 
 
 def _http_get_json_with_status(url: str, *, cookie_header: str = "", timeout_sec: int = 20) -> tuple[int, dict[str, Any]]:
     req = urllib.request.Request(_normalize_url(url), method="GET")
-    req.add_header("User-Agent", "astrbot-plugin-persona-manager/1.0")
+    req.add_header("User-Agent", _get_user_agent())
     if cookie_header:
         req.add_header("Cookie", cookie_header)
 
@@ -279,7 +374,7 @@ def _download_to_file(
     dest.parent.mkdir(parents=True, exist_ok=True)
     final_url = _resolve_url(url, base=base_url or COZYNOOK_SITE_URL)
     req = urllib.request.Request(_normalize_url(final_url), method="GET")
-    req.add_header("User-Agent", "astrbot-plugin-persona-manager/1.0")
+    req.add_header("User-Agent", _get_user_agent())
     if cookie_header:
         req.add_header("Cookie", cookie_header)
     tmp = dest.with_name(dest.name + ".part")
@@ -300,8 +395,16 @@ def _download_to_file(
     return dest
 
 
-def _pick_font_path() -> str | None:
+def _pick_font_path(preferred: str | None = None) -> str | None:
     # 优先选择可显示中文的字体；不同系统路径不同。
+    preferred = (preferred or "").strip()
+    if preferred:
+        try:
+            if Path(preferred).exists():
+                return preferred
+        except Exception:
+            pass
+
     candidates = [
         # Linux 常见
         "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
@@ -345,6 +448,26 @@ def _wrap_lines(text: str, *, width: int, max_lines: int) -> list[str]:
     return out[:max_lines]
 
 
+def _format_post_date_str(v: Any) -> str:
+    """尽量把不同来源的时间字段格式化成可读字符串。"""
+    if v is None:
+        return ""
+    if isinstance(v, (int, float)):
+        ts = float(v)
+        # 兼容毫秒时间戳
+        if ts > 1_000_000_000_000:
+            ts = ts / 1000.0
+        try:
+            return time.strftime("%Y-%m-%d %H:%M", time.localtime(ts))
+        except Exception:
+            return ""
+    try:
+        s = str(v).strip()
+    except Exception:
+        return ""
+    return s[:48]
+
+
 def _render_post_preview_image(
     *,
     title: str,
@@ -354,10 +477,15 @@ def _render_post_preview_image(
     content: str,
     files: list[CozyPostFile],
     pwd: str,
+    font_path_preferred: str | None = None,
 ) -> Path | None:
     try:
         from PIL import Image, ImageDraw, ImageFont
     except Exception:
+        global _PIL_MISSING_WARNED
+        if not _PIL_MISSING_WARNED:
+            _PIL_MISSING_WARNED = True
+            logger.info("CozyNook 预览图功能不可用：缺少可选依赖 Pillow（pip install pillow）。")
         return None
 
     w = 960
@@ -370,8 +498,9 @@ def _render_post_preview_image(
     img = Image.new("RGB", (w, h), bg)
     draw = ImageDraw.Draw(img)
 
-    font_path = _pick_font_path()
+    font_path = _pick_font_path(font_path_preferred)
     if not font_path:
+        logger.debug("CozyNook 预览图字体未找到，已跳过渲染。")
         return None
 
     try:
@@ -381,6 +510,7 @@ def _render_post_preview_image(
         font_small = ImageFont.truetype(font_path, 20)
     except Exception:
         # 字体不可用时直接降级为文本预览，避免“截图乱码/方块字”
+        logger.debug("CozyNook 预览图字体加载失败，已跳过渲染（可在配置中指定字体路径）。")
         return None
 
     pad = 42
@@ -582,6 +712,29 @@ def _cozyverse_fetch_post_by_password(*, pwd: str, cookie: str) -> tuple[int, di
     return status2 or status, post
 
 
+async def _cozyverse_fetch_post_by_password_async(*, pwd: str, cookie: str) -> tuple[int, dict[str, Any]]:
+    """异步版本：通过后端接口用 ULA 打开帖子，返回 (status, post)。"""
+
+    if not cookie:
+        return 0, {}
+
+    pwd_s = (pwd or "").strip()
+
+    url = f"{COZYNOOK_API_BASE}/v1/posts/by-password?pwd={urllib.parse.quote(pwd_s)}"
+    status, data = await _http_get_json_with_status_async(url, cookie_header=cookie)
+    if isinstance(data, dict) and data.get("ok") and isinstance(data.get("post"), dict):
+        return status, data.get("post") or {}
+
+    url2 = f"{COZYNOOK_API_BASE}/posts/by-password?pwd={urllib.parse.quote(pwd_s)}"
+    status2, data2 = await _http_get_json_with_status_async(url2, cookie_header=cookie)
+    if not isinstance(data2, dict) or not data2.get("ok"):
+        return status2 or status, {}
+    post = data2.get("post")
+    if not isinstance(post, dict):
+        return status2 or status, {}
+    return status2 or status, post
+
+
 def _cozyverse_fetch_latest_comments_v1(*, post_id: int, cookie: str, take: int = 10) -> tuple[int, list[str]]:
     """通过 v1 插件接口拉取最新评论（需要登录态 + 频道权限）。
 
@@ -613,6 +766,44 @@ def _cozyverse_fetch_latest_comments_v1(*, post_id: int, cookie: str, take: int 
         items2 = data2.get("items")
         if not isinstance(items2, list):
             # 兼容潜在结构变更：{comments:{items:...}}
+            cobj = data2.get("comments")
+            if isinstance(cobj, dict) and isinstance(cobj.get("items"), list):
+                items2 = cobj.get("items")
+            else:
+                items2 = []
+        comments = _extract_recent_comments({"items": items2})
+        return status2, comments[: int(take)]
+
+    return status2 or status, []
+
+
+async def _cozyverse_fetch_latest_comments_v1_async(
+    *,
+    post_id: int,
+    cookie: str,
+    take: int = 10,
+) -> tuple[int, list[str]]:
+    """异步版本：拉取最新评论。"""
+
+    if not cookie:
+        return 0, []
+
+    ps = max(1, min(int(take or 10), 50))
+
+    url = f"{COZYNOOK_API_BASE}/v1/posts/{int(post_id)}/comments/cursor?page_size={ps}"
+    status, data = await _http_get_json_with_status_async(url, cookie_header=cookie)
+    if isinstance(data, dict) and data.get("ok"):
+        items = data.get("items")
+        if not isinstance(items, list):
+            items = []
+        comments = _extract_recent_comments({"items": items})
+        return status, comments[: int(take)]
+
+    url2 = f"{COZYNOOK_API_BASE}/v1/posts/{int(post_id)}/comments?page=1&page_size={ps}"
+    status2, data2 = await _http_get_json_with_status_async(url2, cookie_header=cookie)
+    if isinstance(data2, dict) and data2.get("ok"):
+        items2 = data2.get("items")
+        if not isinstance(items2, list):
             cobj = data2.get("comments")
             if isinstance(cobj, dict) and isinstance(cobj.get("items"), list):
                 items2 = cobj.get("items")
@@ -658,7 +849,7 @@ async def cozynook_get(self, event: AstrMessageEvent, arg, *, allow_import: bool
         return
 
     try:
-        status, post = await asyncio.to_thread(_cozyverse_fetch_post_by_password, pwd=pwd, cookie=cookie)
+        status, post = await _cozyverse_fetch_post_by_password_async(pwd=pwd, cookie=cookie)
     except Exception as ex:
         logger.error(f"Cozyverse 拉取失败: {ex!s}")
         yield event.plain_result("Cozyverse 拉取失败，请稍后重试。")
@@ -682,6 +873,16 @@ async def cozynook_get(self, event: AstrMessageEvent, arg, *, allow_import: bool
     content = str(post.get("content") or "").strip()
     files = _parse_post_files(post.get("files"))
 
+    date_str = _format_post_date_str(
+        post.get("time")
+        or post.get("createdAt")
+        or post.get("created_at")
+        or post.get("date")
+        or post.get("created")
+    )
+    if not date_str:
+        date_str = time.strftime("%Y-%m-%d", time.localtime())
+
     # 获取帖子时不再渲染图片：只发送“合并转发聊天记录”文本（含附件名与最新评论）。
     # 评论展示条数可配置（0-50）；默认 10。
     try:
@@ -696,21 +897,61 @@ async def cozynook_get(self, event: AstrMessageEvent, arg, *, allow_import: bool
     comments: list[str] = []
     if post_id > 0 and take > 0:
         try:
-            _c_status, comments = await asyncio.to_thread(
-                _cozyverse_fetch_latest_comments_v1,
-                post_id=post_id,
-                cookie=cookie,
-                take=take,
-            )
+            _c_status, comments = await _cozyverse_fetch_latest_comments_v1_async(post_id=post_id, cookie=cookie, take=take)
         except Exception:
             comments = []
-    merged = _format_post_text(pwd=pwd, title=title, author=author, intro=intro, content=content, files=files, comments=comments)
-    parts = split_long_text(merged, max_chars=3000)
-    nodes: list[Comp.Node] = []
-    uin = str(event.get_self_id())
-    for p in parts:
-        nodes.append(Comp.Node(uin=uin, name="角色小屋", content=[Plain(p)]))
-    yield event.chain_result([Comp.Nodes(nodes)])
+    use_preview = bool(getattr(self._cfg, "cozynook_use_preview_image", False))
+    if use_preview:
+        try:
+            preferred_font = str(getattr(self._cfg, "cozynook_preview_font_path", "") or "").strip()
+        except Exception:
+            preferred_font = ""
+
+        preview = _render_post_preview_image(
+            title=title,
+            author=author,
+            date_str=date_str,
+            intro=intro,
+            content=content,
+            files=files,
+            pwd=pwd,
+            font_path_preferred=preferred_font,
+        )
+        if preview is not None:
+            yield event.chain_result([Comp.Image(str(preview))])
+            _schedule_delete(Path(preview))
+        else:
+            merged = _format_post_text(
+                pwd=pwd,
+                title=title,
+                author=author,
+                intro=intro,
+                content=content,
+                files=files,
+                comments=comments,
+            )
+            parts = split_long_text(merged, max_chars=3000)
+            nodes: list[Comp.Node] = []
+            uin = str(event.get_self_id())
+            for p in parts:
+                nodes.append(Comp.Node(uin=uin, name="角色小屋", content=[Plain(p)]))
+            yield event.chain_result([Comp.Nodes(nodes)])
+    else:
+        merged = _format_post_text(
+            pwd=pwd,
+            title=title,
+            author=author,
+            intro=intro,
+            content=content,
+            files=files,
+            comments=comments,
+        )
+        parts = split_long_text(merged, max_chars=3000)
+        nodes: list[Comp.Node] = []
+        uin = str(event.get_self_id())
+        for p in parts:
+            nodes.append(Comp.Node(uin=uin, name="角色小屋", content=[Plain(p)]))
+        yield event.chain_result([Comp.Nodes(nodes)])
 
     if not allow_import:
         async for r in _handle_export_flow(
@@ -1283,8 +1524,7 @@ async def _build_import_content_from_files(self, files: list[CozyPostFile], *, c
         allow_by_ext = ext in _TEXT_EXTS
 
         try:
-            local = await asyncio.to_thread(
-                _download_to_file,
+            local = await _download_to_file_async(
                 f.url,
                 dest=base_dir / f"{int(time.time())}_{f.index}_{f.name}",
                 cookie_header=cookie,
@@ -1333,8 +1573,7 @@ async def _send_files(self, event: AstrMessageEvent, files: list[CozyPostFile], 
                         await event.send(event.plain_result(f"图片导出失败：{f.name}"))
                         continue
                 else:
-                    await asyncio.to_thread(
-                        _download_to_file,
+                    await _download_to_file_async(
                         f.url,
                         dest=local,
                         cookie_header=cookie,
@@ -1357,8 +1596,7 @@ async def _send_files(self, event: AstrMessageEvent, files: list[CozyPostFile], 
                 b64 = f.url.split(",", 1)[1]
                 local.write_bytes(base64.b64decode(b64))
             else:
-                await asyncio.to_thread(
-                    _download_to_file,
+                await _download_to_file_async(
                     f.url,
                     dest=local,
                     cookie_header=cookie,

@@ -57,6 +57,18 @@
     "description": "最新评论条数",
     "hint": "角色小屋展示的最新评论条数（0-50，最大 50；超过会被强制压到 50）。填 0 表示不拉取评论。"
   },
+  "cozynook_use_preview_image": {
+    "type": "bool",
+    "default": false,
+    "description": "角色小屋使用图片预览渲染",
+    "hint": "开启后将尝试把帖子内容渲染成预览图并发送（需要可选依赖 Pillow 与可用字体；若渲染失败会自动回退为合并转发文本）。关闭则使用合并转发文本展示。"
+  },
+  "cozynook_preview_font_path": {
+    "type": "text",
+    "default": "",
+    "description": "CozyNook 预览图字体路径（可选）",
+    "hint": "仅在未来启用图片预览渲染时使用。Docker/精简系统可能缺少中文字体；可在此填写字体文件路径（如 C:/Windows/Fonts/msyh.ttc 或 /usr/share/fonts/...）。留空则使用内置候选路径探测。"
+  },
   "external_persona_id": {
     "type": "text",
     "default": "",

@@ -35,6 +35,15 @@ class PersonaPluginConfig(BaseModel):
     # Cozyverse v1：拉取评论条数（用于 /角色小屋 展示“最新评论”）。
     # 后端强制 page_size <= 50；这里也强制不超过 50。
     cozynook_comments_take: int = 10
+
+    # CozyNook：是否使用图片预览渲染帖子内容。
+    # - False: 使用“合并转发”文本展示（默认）
+    # - True: 尝试渲染预览图并发送（需要可选依赖 Pillow 与可用字体；失败会回退文本）
+    cozynook_use_preview_image: bool = False
+
+    # CozyNook：预览图字体路径（可选）。
+    # 仅在未来启用图片预览渲染时使用；留空则使用内置候选路径探测。
+    cozynook_preview_font_path: str = ""
     
     # 昵称同步配置
     sync_nickname_on_switch: bool = False
