@@ -95,7 +95,7 @@ CozyNook 是一个偏“社区分享”的角色小屋：你可以在网页端�
   这个社区的初衷本来是想给大家一个共享设定的平台，然后总感觉功能缺这缺那的，就变成了类频道的轻社区，没事就当设定共享平台用！
   关于API部分我也做了对应的后端接入API，以下是API文档：
       ### 1. 基础配置与鉴权
-      **硬编码地址**：API 基地址硬编码在 `pm_commands_cozynook.py` 中，固定为 `https://c0zynook.com/api`。
+    **硬编码地址**：API 基地址硬编码在 [src/pm_commands_cozynook.py](src/pm_commands_cozynook.py) 中（根目录 [pm_commands_cozynook.py](pm_commands_cozynook.py) 仅做兼容转发），固定为 `https://c0zynook.com/api`。
       **强制鉴权**：
           必须在配置中填写 `cozynook_sid_cookie`。
           支持格式：`cv_auth=...`、`cv_sid=...` 或完整 Cookie 字符串。

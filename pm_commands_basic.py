@@ -1,8 +1,4 @@
 from __future__ import annotations
 
-# 兼容不同加载方式：对外提供与 src 同名模块。
-
-try:
-    from .src.pm_commands_basic import *  # type: ignore
-except Exception:  # pragma: no cover
-    raise
+# 兼容旧导入路径：允许 `astrbot_plugin_persona_manager.pm_commands_basic` 继续可用。
+from .src.pm_commands_basic import *  # noqa: F401,F403

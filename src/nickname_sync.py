@@ -2,9 +2,13 @@ from __future__ import annotations
 
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent
-from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import (
-    AiocqhttpMessageEvent,
-)
+
+try:  # 可选依赖：仅在安装 aiocqhttp 适配器时可用
+    from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import (
+        AiocqhttpMessageEvent,
+    )
+except Exception:  # pragma: no cover
+    AiocqhttpMessageEvent = None  # type: ignore
 
 from .models import EMPTY_PERSONA_NAME
 
@@ -64,8 +68,9 @@ class NicknameSync:
             external_persona_name: 外部人设名称（当插件内人设为空时使用）
             force: 是否强制同步（忽略缓存）
         """
-        # 只支持 aiocqhttp 平台
-        if not isinstance(event, AiocqhttpMessageEvent):
+        # 平台无关：仅在事件对象暴露 bot 且 bot 具备对应能力时尝试。
+        bot = getattr(event, "bot", None)
+        if bot is None:
             return
 
         if not (self.enabled or force):
@@ -121,12 +126,16 @@ class NicknameSync:
             logger.info(f"Persona Manager 已同步昵称为 {display_name}")
 
     async def _sync_qq_profile(
-        self, event: AiocqhttpMessageEvent, nickname: str
+        self, event: AstrMessageEvent, nickname: str
     ) -> bool:
         """修改 QQ 昵称"""
-        if hasattr(event.bot, "set_qq_profile"):
+        bot = getattr(event, "bot", None)
+        if bot is None:
+            return False
+
+        if hasattr(bot, "set_qq_profile"):
             try:
-                await event.bot.set_qq_profile(nickname=nickname)
+                await bot.set_qq_profile(nickname=nickname)
                 logger.debug(f"Persona Manager 已同步 QQ 昵称为 {nickname}")
                 return True
             except Exception as exc:
@@ -137,16 +146,20 @@ class NicknameSync:
             )
         return False
 
-    async def _sync_group_card(self, event: AiocqhttpMessageEvent, card: str) -> bool:
+    async def _sync_group_card(self, event: AstrMessageEvent, card: str) -> bool:
         """修改群名片"""
         group_id = event.get_group_id()
         if not group_id:
             return False
 
         user_id = event.get_self_id()
-        if hasattr(event.bot, "call_action"):
+        bot = getattr(event, "bot", None)
+        if bot is None:
+            return False
+
+        if hasattr(bot, "call_action"):
             try:
-                await event.bot.call_action(
+                await bot.call_action(
                     "set_group_card",
                     group_id=int(group_id),
                     user_id=int(user_id),

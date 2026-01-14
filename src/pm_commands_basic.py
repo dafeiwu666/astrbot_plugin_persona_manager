@@ -36,7 +36,7 @@ def _build_grouped_persona_nodes(*, user_id: str, user_name: str, grouped: dict)
     return nodes
 
 
-async def add_persona(self, event: AstrMessageEvent, 名称: GreedyStr):
+async def add_persona(self, event: AstrMessageEvent, name: GreedyStr):
     err = self._require_access(event)
     if err:
         yield event.plain_result(err)
@@ -78,7 +78,7 @@ async def add_persona(self, event: AstrMessageEvent, 名称: GreedyStr):
             controller.keep(timeout=timeout, reset_timeout=True)
             return
 
-        text = (e.message_str or "").strip()
+        text = (getattr(e, "message_str", "") or "").strip()
 
         if is_finish_edit_command(text):
             try:
@@ -186,7 +186,7 @@ async def add_persona(self, event: AstrMessageEvent, 名称: GreedyStr):
 
         if state.stage == PersonaEditStage.WRAPPER_PREFIX:
             t = text.lstrip("/／").strip()
-            state.wrapper_prefix = "" if t == "跳过" else (e.message_str or "").strip()
+            state.wrapper_prefix = "" if t == "跳过" else (getattr(e, "message_str", "") or "").strip()
             state.stage = PersonaEditStage.WRAPPER_SUFFIX
             await e.send(e.plain_result("请输入后置提示词（输入 /跳过 表示留空）"))
             controller.keep(timeout=timeout, reset_timeout=True)
@@ -194,7 +194,7 @@ async def add_persona(self, event: AstrMessageEvent, 名称: GreedyStr):
 
         if state.stage == PersonaEditStage.WRAPPER_SUFFIX:
             t = text.lstrip("/／").strip()
-            state.wrapper_suffix = "" if t == "跳过" else (e.message_str or "").strip()
+            state.wrapper_suffix = "" if t == "跳过" else (getattr(e, "message_str", "") or "").strip()
             state.stage = PersonaEditStage.CLEAN
             await e.send(
                 e.plain_result(
@@ -252,7 +252,7 @@ async def add_persona(self, event: AstrMessageEvent, 名称: GreedyStr):
                 controller.keep(timeout=timeout, reset_timeout=True)
                 return
 
-            pattern = (e.message_str or "").strip()
+            pattern = (getattr(e, "message_str", "") or "").strip()
             if not pattern:
                 await e.send(e.plain_result("请输入正则表达式，或 /跳过。"))
                 controller.keep(timeout=timeout, reset_timeout=True)
@@ -349,7 +349,7 @@ async def search_personas(self, event: AstrMessageEvent):
             controller.keep(timeout=timeout, reset_timeout=True)
             return
 
-        text = (e.message_str or "").strip()
+        text = (getattr(e, "message_str", "") or "").strip()
 
         if not text:
             await e.send(e.plain_result("标签不能为空，请重新输入"))
@@ -382,13 +382,13 @@ async def search_personas(self, event: AstrMessageEvent):
         event.stop_event()
 
 
-async def switch_persona(self, event: AstrMessageEvent, 名称: GreedyStr):
+async def switch_persona(self, event: AstrMessageEvent, name: GreedyStr):
     err = self._require_access(event)
     if err:
         yield event.plain_result(err)
         return
 
-    name = str(名称).strip()
+    name = str(name).strip()
     if not name:
         yield event.plain_result("用法：/切换角色 名称\n或使用：/休息模式 来清除角色")
         return
@@ -489,13 +489,13 @@ async def current_persona(self, event: AstrMessageEvent):
     yield event.plain_result(f"当前角色：{name}")
 
 
-async def view_persona(self, event: AstrMessageEvent, 名称: GreedyStr):
+async def view_persona(self, event: AstrMessageEvent, name: GreedyStr):
     err = self._require_access(event)
     if err:
         yield event.plain_result(err)
         return
 
-    name = str(名称).strip()
+    name = str(name).strip()
     if not name:
         yield event.plain_result("用法：/查看角色 名称")
         return
@@ -547,13 +547,13 @@ async def view_persona(self, event: AstrMessageEvent, 名称: GreedyStr):
     yield event.chain_result([Comp.Nodes(nodes)])
 
 
-async def delete_persona(self, event: AstrMessageEvent, 名称: GreedyStr):
+async def delete_persona(self, event: AstrMessageEvent, name: GreedyStr):
     err = self._require_access(event)
     if err:
         yield event.plain_result(err)
         return
 
-    name = str(名称).strip()
+    name = str(name).strip()
     if not name:
         yield event.plain_result("用法：/删除角色 名称")
         return
@@ -574,13 +574,13 @@ async def delete_persona(self, event: AstrMessageEvent, 名称: GreedyStr):
     yield event.plain_result(f"已删除角色：{name}")
 
 
-async def edit_persona(self, event: AstrMessageEvent, 名称: GreedyStr):
+async def edit_persona(self, event: AstrMessageEvent, name: GreedyStr):
     err = self._require_access(event)
     if err:
         yield event.plain_result(err)
         return
 
-    name = str(名称).strip()
+    name = str(name).strip()
     if not name:
         yield event.plain_result("用法：/修改设定 角色名")
         return
@@ -639,7 +639,7 @@ async def edit_persona(self, event: AstrMessageEvent, 名称: GreedyStr):
             controller.keep(timeout=timeout, reset_timeout=True)
             return
 
-        text = (e.message_str or "").strip()
+        text = (getattr(e, "message_str", "") or "").strip()
 
         if is_finish_edit_command(text):
             try:

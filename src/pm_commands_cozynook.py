@@ -282,9 +282,21 @@ def _download_to_file(
     req.add_header("User-Agent", "astrbot-plugin-persona-manager/1.0")
     if cookie_header:
         req.add_header("Cookie", cookie_header)
-    with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
-        data = resp.read()
-    dest.write_bytes(data)
+    tmp = dest.with_name(dest.name + ".part")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
+            with tmp.open("wb") as f:
+                while True:
+                    chunk = resp.read(64 * 1024)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+        tmp.replace(dest)
+    finally:
+        try:
+            tmp.unlink(missing_ok=True)
+        except Exception:
+            pass
     return dest
 
 
@@ -646,7 +658,7 @@ async def cozynook_get(self, event: AstrMessageEvent, arg, *, allow_import: bool
         return
 
     try:
-        status, post = _cozyverse_fetch_post_by_password(pwd=pwd, cookie=cookie)
+        status, post = await asyncio.to_thread(_cozyverse_fetch_post_by_password, pwd=pwd, cookie=cookie)
     except Exception as ex:
         logger.error(f"Cozyverse 拉取失败: {ex!s}")
         yield event.plain_result("Cozyverse 拉取失败，请稍后重试。")
@@ -684,7 +696,12 @@ async def cozynook_get(self, event: AstrMessageEvent, arg, *, allow_import: bool
     comments: list[str] = []
     if post_id > 0 and take > 0:
         try:
-            _c_status, comments = _cozyverse_fetch_latest_comments_v1(post_id=post_id, cookie=cookie, take=take)
+            _c_status, comments = await asyncio.to_thread(
+                _cozyverse_fetch_latest_comments_v1,
+                post_id=post_id,
+                cookie=cookie,
+                take=take,
+            )
         except Exception:
             comments = []
     merged = _format_post_text(pwd=pwd, title=title, author=author, intro=intro, content=content, files=files, comments=comments)
@@ -1266,7 +1283,8 @@ async def _build_import_content_from_files(self, files: list[CozyPostFile], *, c
         allow_by_ext = ext in _TEXT_EXTS
 
         try:
-            local = _download_to_file(
+            local = await asyncio.to_thread(
+                _download_to_file,
                 f.url,
                 dest=base_dir / f"{int(time.time())}_{f.index}_{f.name}",
                 cookie_header=cookie,
@@ -1315,7 +1333,13 @@ async def _send_files(self, event: AstrMessageEvent, files: list[CozyPostFile], 
                         await event.send(event.plain_result(f"图片导出失败：{f.name}"))
                         continue
                 else:
-                    _download_to_file(f.url, dest=local, cookie_header=cookie, base_url=base_url)
+                    await asyncio.to_thread(
+                        _download_to_file,
+                        f.url,
+                        dest=local,
+                        cookie_header=cookie,
+                        base_url=base_url,
+                    )
 
                 await event.send(event.chain_result([Comp.Image(str(local))]))
 
@@ -1333,7 +1357,13 @@ async def _send_files(self, event: AstrMessageEvent, files: list[CozyPostFile], 
                 b64 = f.url.split(",", 1)[1]
                 local.write_bytes(base64.b64decode(b64))
             else:
-                _download_to_file(f.url, dest=local, cookie_header=cookie, base_url=base_url)
+                await asyncio.to_thread(
+                    _download_to_file,
+                    f.url,
+                    dest=local,
+                    cookie_header=cookie,
+                    base_url=base_url,
+                )
 
             file_comp = _make_file_component(local)
             if file_comp is None:
