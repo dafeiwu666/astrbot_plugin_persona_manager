@@ -1722,7 +1722,11 @@ async def _send_files(
                             import base64
 
                             b64 = f.url.split(",", 1)[1]
-                            local.write_bytes(base64.b64decode(b64))
+
+                            def _decode_and_write_image() -> None:
+                                local.write_bytes(base64.b64decode(b64))
+
+                            await asyncio.to_thread(_decode_and_write_image)
                         except Exception:
                             await event.send(event.plain_result(f"图片导出失败：{f.name}"))
                             continue
@@ -1749,7 +1753,11 @@ async def _send_files(
                     import base64
 
                     b64 = f.url.split(",", 1)[1]
-                    local.write_bytes(base64.b64decode(b64))
+
+                    def _decode_and_write_file() -> None:
+                        local.write_bytes(base64.b64decode(b64))
+
+                    await asyncio.to_thread(_decode_and_write_file)
                 else:
                     await _download_to_file_async(
                         f.url,
