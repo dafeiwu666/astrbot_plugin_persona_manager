@@ -2,7 +2,7 @@
   "enabled": {
     "type": "bool",
     "default": true,
-    "description": "是否启用角色管理插件"
+    "description": "是否启用角色社区化人设管理插件"
   },
   "whitelist_user_ids": {
     "type": "list",

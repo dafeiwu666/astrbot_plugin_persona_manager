@@ -34,7 +34,7 @@ from .src import pm_commands_cozynook as _pm_commands_cozynook
 
 
 class Main(Star):
-    """角色管理（会话添加/列表转发/注入前后缀/正则清洗 + CozyNook 角色小屋）"""
+    """角色社区化人设管理（会话添加/列表转发/注入前后缀/正则清洗 + CozyNook 角色小屋）"""
 
     def __init__(self, context: Context, config: dict | None = None):
         super().__init__(context)
@@ -50,9 +50,7 @@ class Main(Star):
         self._kw_trigger_raw: str | None = None
         self._kw_triggers: list[tuple[str, str, str]] = []  # (mode, keyword, prompt)
         
-        logger.info(
-            f"Persona Manager 昵称同步配置：{self._nickname_sync.describe_settings()}"
-        )
+        logger.info(f"角色社区化人设管理 昵称同步配置：{self._nickname_sync.describe_settings()}")
 
     def _now_ts(self) -> int:
         return int(time.time())

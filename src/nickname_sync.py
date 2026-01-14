@@ -34,7 +34,7 @@ class NicknameSync:
         self.nickname_sync_mode = config.get("nickname_sync_mode", "group_card")
         if self.nickname_sync_mode not in {"profile", "group_card", "hybrid"}:
             logger.warning(
-                f"Persona Manager 昵称同步模式 {self.nickname_sync_mode} 无效，将使用默认值 group_card"
+                f"角色社区化人设管理 昵称同步模式 {self.nickname_sync_mode} 无效，将使用默认值 group_card"
             )
             self.nickname_sync_mode = "group_card"
         self.nickname_template = config.get("nickname_template", "{persona_name}")
@@ -48,7 +48,7 @@ class NicknameSync:
         try:
             nickname = self.nickname_template.format(persona_name=persona_name)
         except Exception as exc:
-            logger.warning(f"Persona Manager 昵称模板解析失败：{exc}，使用人设名")
+            logger.warning(f"角色社区化人设管理 昵称模板解析失败：{exc}，使用人设名")
             nickname = persona_name
         return nickname[:60] if nickname else persona_name[:60]
 
@@ -84,7 +84,7 @@ class NicknameSync:
                 display_name = external_persona_name
             else:
                 # 外部人设名也为空，不同步
-                logger.debug("Persona Manager 插件内外人设均为空，跳过昵称同步")
+                logger.debug("角色社区化人设管理 插件内外人设均为空，跳过昵称同步")
                 return
 
         # 检查是否需要同步（避免重复操作）
@@ -97,7 +97,7 @@ class NicknameSync:
             bot_key += f":{group_id}"
             
         if not force and self._last_synced_persona.get(bot_key) == display_name:
-            logger.debug(f"Persona Manager 人设 {display_name} 已同步过，跳过 (Key: {bot_key})")
+            logger.debug(f"角色社区化人设管理 人设 {display_name} 已同步过，跳过 (Key: {bot_key})")
             return
 
         nickname = self.format_nickname(display_name)
@@ -123,7 +123,7 @@ class NicknameSync:
         # 只有在成功应用昵称后才更新缓存，避免下次重复尝试
         if nickname_applied:
             self._last_synced_persona[bot_key] = display_name
-            logger.info(f"Persona Manager 已同步昵称为 {display_name}")
+            logger.info(f"角色社区化人设管理 已同步昵称为 {display_name}")
 
     async def _sync_qq_profile(
         self, event: AstrMessageEvent, nickname: str
@@ -136,13 +136,13 @@ class NicknameSync:
         if hasattr(bot, "set_qq_profile"):
             try:
                 await bot.set_qq_profile(nickname=nickname)
-                logger.debug(f"Persona Manager 已同步 QQ 昵称为 {nickname}")
+                logger.debug(f"角色社区化人设管理 已同步 QQ 昵称为 {nickname}")
                 return True
             except Exception as exc:
-                logger.error(f"Persona Manager 同步 QQ 昵称失败：{exc}")
+                logger.error(f"角色社区化人设管理 同步 QQ 昵称失败：{exc}")
         else:
             logger.warning(
-                "Persona Manager 当前适配器未实现 set_qq_profile 接口，跳过 QQ 昵称同步。"
+                "角色社区化人设管理 当前适配器未实现 set_qq_profile 接口，跳过 QQ 昵称同步。"
             )
         return False
 
@@ -165,13 +165,13 @@ class NicknameSync:
                     user_id=int(user_id),
                     card=card,
                 )
-                logger.debug(f"Persona Manager 已同步群名片为 {card} (群 {group_id})")
+                logger.debug(f"角色社区化人设管理 已同步群名片为 {card} (群 {group_id})")
                 return True
             except Exception as exc:
-                logger.error(f"Persona Manager 同步群名片失败：{exc}")
+                logger.error(f"角色社区化人设管理 同步群名片失败：{exc}")
         else:
             logger.warning(
-                "Persona Manager 当前适配器未实现 call_action 接口，跳过群名片同步。"
+                "角色社区化人设管理 当前适配器未实现 call_action 接口，跳过群名片同步。"
             )
         return False
 
