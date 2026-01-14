@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import json
 import re
+import socket
+import sys
 import textwrap
 import time
 import urllib.parse
@@ -135,6 +138,17 @@ async def _download_to_file_async(
     dest.parent.mkdir(parents=True, exist_ok=True)
     final_url = _resolve_url(url, base=base_url or COZYNOOK_SITE_URL)
 
+    # SSRF 防护：拒绝非 http(s)、以及指向 localhost/私网/回环的 host。
+    try:
+        parts0 = urllib.parse.urlsplit(final_url)
+        if parts0.scheme not in {"http", "https"}:
+            raise ValueError("unsupported scheme")
+        host0 = parts0.hostname or ""
+        if not await _is_safe_download_host(host0):
+            raise ValueError(f"blocked host: {host0}")
+    except Exception as ex:
+        raise RuntimeError(f"疑似 SSRF 风险，已拒绝下载该 URL: {final_url}") from ex
+
     headers = {"User-Agent": _get_user_agent()}
     if cookie_header:
         headers["Cookie"] = cookie_header
@@ -147,18 +161,41 @@ async def _download_to_file_async(
             session = aiohttp.ClientSession(timeout=timeout)
             close_session = True
 
-        async with session.get(_normalize_url(final_url), headers=headers, timeout=timeout) as resp:
-            resp.raise_for_status()
-            if _AIOFILES_AVAILABLE and aiofiles is not None:
-                async with aiofiles.open(tmp, "wb") as f:  # type: ignore[attr-defined]
-                    async for chunk in resp.content.iter_chunked(64 * 1024):
-                        if chunk:
-                            await f.write(chunk)
-            else:
-                with tmp.open("wb") as f:
-                    async for chunk in resp.content.iter_chunked(64 * 1024):
-                        if chunk:
-                            f.write(chunk)
+        current_url = final_url
+        for _ in range(6):
+            parts = urllib.parse.urlsplit(current_url)
+            host = parts.hostname or ""
+            if not await _is_safe_download_host(host):
+                raise RuntimeError(f"疑似 SSRF 风险，已拒绝下载该 URL: {current_url}")
+
+            async with session.get(
+                _normalize_url(current_url),
+                headers=headers,
+                timeout=timeout,
+                allow_redirects=False,
+            ) as resp:
+                # 手动处理重定向，避免自动跳转到内网地址。
+                if 300 <= int(resp.status) < 400:
+                    loc = resp.headers.get("Location") or resp.headers.get("location")
+                    if loc:
+                        current_url = urllib.parse.urljoin(current_url, str(loc))
+                        continue
+
+                resp.raise_for_status()
+
+                if _AIOFILES_AVAILABLE and aiofiles is not None:
+                    async with aiofiles.open(tmp, "wb") as f:  # type: ignore[attr-defined]
+                        async for chunk in resp.content.iter_chunked(64 * 1024):
+                            if chunk:
+                                await f.write(chunk)
+                else:
+                    with tmp.open("wb") as f:
+                        async for chunk in resp.content.iter_chunked(64 * 1024):
+                            if chunk:
+                                f.write(chunk)
+                break
+        else:
+            raise RuntimeError(f"下载重定向过多，已放弃：{final_url}")
         tmp.replace(dest)
         return dest
     finally:
@@ -263,6 +300,69 @@ def _resolve_url(url: str, *, base: str) -> str:
         return s
 
 
+def _is_probably_localhost(host: str) -> bool:
+    h = (host or "").strip().strip("[]").casefold()
+    return h in {"localhost", "localhost.localdomain"} or h.endswith(".localhost")
+
+
+def _is_private_or_local_ip(ip_str: str) -> bool:
+    try:
+        ip = ipaddress.ip_address(ip_str)
+    except Exception:
+        return True
+    return bool(
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_multicast
+        or ip.is_unspecified
+        or ip.is_reserved
+    )
+
+
+async def _is_safe_download_host(host: str) -> bool:
+    """尽量避免 SSRF：拒绝 localhost/私网/回环等地址。"""
+
+    if not host:
+        return False
+
+    host_s = host.strip().strip("[]")
+    if _is_probably_localhost(host_s):
+        return False
+
+    # IP 字面量：快速判定
+    try:
+        ipaddress.ip_address(host_s)
+        return not _is_private_or_local_ip(host_s)
+    except Exception:
+        pass
+
+    # 域名：允许官方域名；其余域名做一次解析并拒绝解析到私网/回环
+    h = host_s.casefold()
+    if h == "c0zynook.com" or h.endswith(".c0zynook.com"):
+        return True
+
+    try:
+        loop = asyncio.get_running_loop()
+        infos = await loop.getaddrinfo(host_s, None, type=socket.SOCK_STREAM)
+    except Exception:
+        return False
+
+    addrs: set[str] = set()
+    for _family, _type, _proto, _canonname, sockaddr in infos:
+        try:
+            ip = sockaddr[0]
+            if ip:
+                addrs.add(str(ip))
+        except Exception:
+            continue
+
+    if not addrs:
+        return False
+
+    return all(not _is_private_or_local_ip(ip) for ip in addrs)
+
+
 async def _delete_file_later(path: Path, delay_sec: int) -> None:
     try:
         await asyncio.sleep(max(int(delay_sec), 0))
@@ -357,40 +457,69 @@ def _make_file_component(file_path: Path):
 
 
 def _pick_font_path(preferred: str | None = None) -> str | None:
-    # 优先选择可显示中文的字体；不同系统路径不同。
+    # 优先使用用户显式配置的字体路径。
     preferred = (preferred or "").strip()
     if preferred:
         try:
-            if Path(preferred).exists():
-                return preferred
+            p = Path(preferred)
+            if p.exists() and p.is_file():
+                return str(p)
         except Exception:
             pass
 
-    candidates = [
-        # Linux 常见
-        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-        "/usr/share/fonts/opentype/noto/NotoSansCJKsc-Regular.otf",
-        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
-        "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
-        "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        # macOS 常见
-        "/System/Library/Fonts/PingFang.ttc",
-        "/System/Library/Fonts/STHeiti Light.ttc",
-        "/Library/Fonts/Arial Unicode.ttf",
-        # Windows 常见
-        "C:/Windows/Fonts/msyh.ttc",
-        "C:/Windows/Fonts/msyh.ttf",
-        "C:/Windows/Fonts/simhei.ttf",
-        "C:/Windows/Fonts/simsun.ttc",
+    # 其次在系统字体目录中按“常见字体文件名”查找。
+    roots: list[Path]
+    if sys.platform.startswith("win"):
+        roots = [Path("C:/Windows/Fonts")]
+    elif sys.platform == "darwin":
+        roots = [Path("/System/Library/Fonts"), Path("/Library/Fonts")]
+    else:
+        roots = [
+            Path("/usr/share/fonts"),
+            Path("/usr/local/share/fonts"),
+            Path.home() / ".fonts",
+        ]
+
+    preferred_names = [
+        # Windows
+        "msyh.ttc",
+        "msyh.ttf",
+        "simsun.ttc",
+        "simhei.ttf",
+        # macOS
+        "PingFang.ttc",
+        "STHeiti Light.ttc",
+        # Linux
+        "NotoSansCJK-Regular.ttc",
+        "NotoSansCJKsc-Regular.otf",
+        "wqy-microhei.ttc",
+        "wqy-zenhei.ttc",
+        "DejaVuSans.ttf",
     ]
 
-    for p in candidates:
+    for root in roots:
         try:
-            if Path(p).exists():
-                return p
+            if not root.exists():
+                continue
+            for fname in preferred_names:
+                p = root / fname
+                if p.exists() and p.is_file():
+                    return str(p)
         except Exception:
             continue
+
+    # 最后做一次“按文件名”有限递归搜索（在 to_thread 的渲染线程中执行，不阻塞事件循环）。
+    for root in roots:
+        try:
+            if not root.exists():
+                continue
+            for fname in preferred_names:
+                for p in root.rglob(fname):
+                    if p.exists() and p.is_file():
+                        return str(p)
+        except Exception:
+            continue
+
     return None
 
 

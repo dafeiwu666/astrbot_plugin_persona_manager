@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import re
 
 from astrbot.api import logger
@@ -176,7 +177,7 @@ async def _advance_add_persona_session(
             controller.keep(timeout=timeout, reset_timeout=True)
             return
         try:
-            re.compile(pattern)
+            await asyncio.to_thread(re.compile, pattern)
         except Exception:
             await e.send(e.plain_result("正则表达式无效，请重新输入，或 /跳过。"))
             controller.keep(timeout=timeout, reset_timeout=True)
@@ -346,10 +347,10 @@ async def add_persona(self, event: AstrMessageEvent, name: GreedyStr):
         yield event.plain_result(err)
         return
 
-    # 强制要求命令必须带名称：/创建角色 名称
-    # 不使用 GreedyStr 兜底，避免缺参时出现 "GreedyStr"/"None" 被当作有效名称。
-    name = self._extract_command_tail(getattr(event, "message_str", "") or "", "创建角色").strip()
-    if not name:
+    # 统一使用框架解析的参数，避免重复从 message_str 手动解析导致行为不一致。
+    # 部分框架/适配器在缺参时可能把类型名或 None 的字符串化结果塞进来，这里做显式拦截。
+    name = str(name or "").strip()
+    if (not name) or (name.casefold() in {"none", "greedystr"}):
         yield event.plain_result("缺少角色名称，请使用：/创建角色 名称")
         return
 
