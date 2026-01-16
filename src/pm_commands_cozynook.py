@@ -69,8 +69,8 @@ _CACHE_PRUNE_MAX_FILES = 300
 COZYNOOK_SITE_URL = "https://c0zynook.com"
 COZYNOOK_API_BASE = f"{COZYNOOK_SITE_URL}/api"
 
-# 角色小屋：指定频道分享码（不在 conf 显示）。
-DEFAULT_CHANNEL_INVITE_CODE = "XB-1F0C5B453D6E109B"
+# 卡片小屋：指定频道分享码（不在 conf 显示）。
+DEFAULT_CHANNEL_INVITE_CODE = "XB-U43BKP3B4DSA2ZNN"
 
 
 _PIL_MISSING_WARNED = False
@@ -95,7 +95,7 @@ async def _http_get_json_with_status_async(
     """异步获取 JSON（依赖 aiohttp）。"""
 
     if not _AIOHTTP_AVAILABLE or aiohttp is None:
-        logger.error("角色小屋：缺少 aiohttp，无法请求接口")
+        logger.error("卡片小屋：缺少 aiohttp，无法请求接口")
         return 0, {}
 
     headers = {"User-Agent": _get_user_agent()}
@@ -141,7 +141,7 @@ async def _http_post_json_with_status_async(
     """异步 POST JSON（依赖 aiohttp）。"""
 
     if not _AIOHTTP_AVAILABLE or aiohttp is None:
-        logger.error("角色小屋：缺少 aiohttp，无法请求接口")
+        logger.error("卡片小屋：缺少 aiohttp，无法请求接口")
         return 0, {}
 
     headers = {"User-Agent": _get_user_agent()}
@@ -179,12 +179,17 @@ async def _http_post_json_with_status_async(
 async def _cozyverse_join_channel_by_invite_async(
     *,
     code: str,
+    password: str | None = None,
     cookie: str,
     session: Any,
 ) -> tuple[int, dict[str, Any]]:
     code_s = str(code or "").strip().lower()
+    pwd_s = str(password or "").strip()
     url = f"{COZYNOOK_API_BASE}/invites/join"
-    return await _http_post_json_with_status_async(url, {"code": code_s}, cookie_header=cookie, session=session)
+    body: dict[str, Any] = {"code": code_s}
+    if pwd_s:
+        body["password"] = pwd_s
+    return await _http_post_json_with_status_async(url, body, cookie_header=cookie, session=session)
 
 
 async def _cozyverse_fetch_bootstrap_async(
@@ -913,7 +918,7 @@ def _render_post_preview_image(
     y = 34
 
     draw.rounded_rectangle((pad - 16, y - 10, w - pad + 16, y + 66), radius=18, fill=(26, 28, 36))
-    draw.text((pad, y), "CozyNook · 角色小屋", fill=accent, font=font_meta)
+    draw.text((pad, y), "CozyNook · 卡片小屋", fill=accent, font=font_meta)
     y += 56
 
     title_lines = _wrap_lines((title or "(无标题)"), width=22, max_lines=2)
@@ -1146,10 +1151,10 @@ async def _cozyverse_fetch_latest_comments_v1_async(
 
 
 async def cozynook_draw_channel_cards(self, event: AstrMessageEvent, section_name: Any = ""):
-    """/角色小屋：从指定分享码频道随机抽卡片，并输出标题 + 密码。
+    """/卡片小屋：从指定分享码频道随机抽卡片，并输出标题 + 密码。
 
-    - /角色小屋：输出分区列表 + 从全频道随机抽取
-    - /角色小屋 分区名：仅从该分区随机抽取
+    - /卡片小屋：输出分区列表 + 从全频道随机抽取
+    - /卡片小屋 分区名：仅从该分区随机抽取
     """
 
     def _yield_merged_text(lines: list[str]):
@@ -1158,7 +1163,7 @@ async def cozynook_draw_channel_cards(self, event: AstrMessageEvent, section_nam
         nodes: list[Comp.Node] = []
         uin = str(event.get_self_id())
         for p in parts:
-            nodes.append(Comp.Node(uin=uin, name="角色小屋", content=[Plain(p)]))
+            nodes.append(Comp.Node(uin=uin, name="卡片小屋", content=[Plain(p)]))
         return event.chain_result([Comp.Nodes(nodes)])
 
     err = self._require_access(event)
@@ -1193,13 +1198,16 @@ async def cozynook_draw_channel_cards(self, event: AstrMessageEvent, section_nam
     if pick_n > 30:
         pick_n = 30
 
-    code = str(DEFAULT_CHANNEL_INVITE_CODE or "").strip().lower()
+    code_override = str(getattr(self._cfg, "cozynook_channel_invite_code", "") or "").strip()
+    code = str(code_override or DEFAULT_CHANNEL_INVITE_CODE or "").strip().lower()
     if not _is_xb(code):
-        yield _yield_merged_text(["角色小屋分享码配置无效（应为 xb-16位）。"])
+        yield _yield_merged_text(["卡片小屋分享码配置无效（cozynook_channel_invite_code，应为 xb-16位）。"])
         return
 
+    join_password = str(getattr(self._cfg, "cozynook_channel_join_password", "") or "").strip()
+
     if not _AIOHTTP_AVAILABLE or aiohttp is None:
-        yield _yield_merged_text(["缺少依赖 aiohttp，无法访问角色小屋接口。", "请安装：pip install aiohttp"])
+        yield _yield_merged_text(["缺少依赖 aiohttp，无法访问卡片小屋接口。", "请安装：pip install aiohttp"])
         return
 
     session = None
@@ -1213,12 +1221,31 @@ async def cozynook_draw_channel_cards(self, event: AstrMessageEvent, section_nam
         session = aiohttp.ClientSession(timeout=timeout, headers=headers)
         close_session = True
 
-        j_status, j_data = await _cozyverse_join_channel_by_invite_async(code=code, cookie=cookie, session=session)
+        j_status, j_data = await _cozyverse_join_channel_by_invite_async(
+            code=code,
+            password=join_password,
+            cookie=cookie,
+            session=session,
+        )
         if not (isinstance(j_data, dict) and j_data.get("ok")):
             if int(j_status or 0) == 401:
                 yield _yield_merged_text(["登录态已失效：已退出。", "请更新 cozynook_sid_cookie 后重试。"])
                 return
-            yield _yield_merged_text(["加入频道失败：已退出。"])
+
+            detail = ""
+            if isinstance(j_data, dict):
+                detail = str(j_data.get("detail") or "").strip()
+            if int(j_status or 0) == 403 and detail == "password_required":
+                yield _yield_merged_text(
+                    [
+                        "加入频道失败：该分享码需要频道密码（password_required）。",
+                        "请在插件配置里填写 cozynook_channel_join_password 后重试。",
+                    ]
+                )
+                return
+
+            suffix = f"（status={int(j_status or 0)}{', detail=' + detail if detail else ''}）"
+            yield _yield_merged_text([f"加入频道失败：已退出。{suffix}"])
             return
 
         try:
@@ -1280,7 +1307,7 @@ async def cozynook_draw_channel_cards(self, event: AstrMessageEvent, section_nam
                     [
                         "未找到该分区，已退出。",
                         f"可用分区：{hint}",
-                        "用法：/角色小屋 分区名",
+                        "用法：/卡片小屋 分区名",
                     ]
                 )
                 return
@@ -1328,13 +1355,13 @@ async def cozynook_draw_channel_cards(self, event: AstrMessageEvent, section_nam
         if not section_query:
             if section_name_list:
                 lines.append("【分区】" + " / ".join(section_name_list))
-                lines.append("用法：/角色小屋 分区名  （仅从该分区随机）")
+                lines.append("用法：/卡片小屋 分区名  （仅从该分区随机）")
             else:
                 lines.append("【分区】(暂无分区)")
         else:
             lines.append(f"【分区】{section_query}")
 
-        lines.append(f"【角色小屋】抽到 {want} 张卡片")
+        lines.append(f"【卡片小屋】抽到 {want} 张卡片")
         for i, p in enumerate(chosen, 1):
             title = str(p.get("title") or "").strip() or "(无标题)"
             pwd = str(p.get("postPwd") or "").strip()
@@ -1343,7 +1370,7 @@ async def cozynook_draw_channel_cards(self, event: AstrMessageEvent, section_nam
         if want < int(pick_n):
             lines.append(f"（本次仅抽到 {want} 张：频道内可见密码的卡片不足 {pick_n} 张）")
 
-        lines.append("\n可用指令：/获取卡片 ula-xxxx（查看帖子） /导入角色 ula-xxxx（导入）")
+        lines.append("\n可用指令：/获取卡片 ula-xxxx（查看帖子） /导入卡片 ula-xxxx（导入）")
 
         yield _yield_merged_text(lines)
     finally:
@@ -1354,8 +1381,204 @@ async def cozynook_draw_channel_cards(self, event: AstrMessageEvent, section_nam
                 pass
 
 
+async def cozynook_search_cards(self, event: AstrMessageEvent, keyword: str):
+    """按关键词搜索卡片小屋帖子标题，并输出标题 + ULA。
+
+    用于 /查找卡片 的“小屋”分支。
+    """
+
+    def _yield_merged_text(lines: list[str]):
+        merged = "\n".join([str(x) for x in lines if str(x).strip()])
+        parts = split_long_text(merged, max_chars=3000)
+        nodes: list[Comp.Node] = []
+        uin = str(event.get_self_id())
+        for p in parts:
+            nodes.append(Comp.Node(uin=uin, name="卡片小屋", content=[Plain(p)]))
+        return event.chain_result([Comp.Nodes(nodes)])
+
+    err = self._require_access(event)
+    if err:
+        yield event.plain_result(err)
+        return
+
+    kw_raw = normalize_one_line(str(keyword or "")).strip()
+    if not kw_raw:
+        yield _yield_merged_text(["关键词不能为空。"])
+        return
+
+    cookie = ""
+    try:
+        cookie = self._cfg.cozynook_cookie_header()
+    except Exception:
+        cookie = ""
+
+    if not cookie:
+        yield _yield_merged_text(
+            [
+                "未配置 Cozyverse 登录态 Cookie。",
+                "请在插件配置里填写 cozynook_sid_cookie（可填 cv_auth=... 或 cv_sid=...）。",
+            ]
+        )
+        return
+
+    code_override = str(getattr(self._cfg, "cozynook_channel_invite_code", "") or "").strip()
+    code = str(code_override or DEFAULT_CHANNEL_INVITE_CODE or "").strip().lower()
+    if not _is_xb(code):
+        yield _yield_merged_text(["卡片小屋分享码配置无效（cozynook_channel_invite_code，应为 xb-16位）。"])
+        return
+
+    join_password = str(getattr(self._cfg, "cozynook_channel_join_password", "") or "").strip()
+
+    if not _AIOHTTP_AVAILABLE or aiohttp is None:
+        yield _yield_merged_text(["缺少依赖 aiohttp，无法访问卡片小屋接口。", "请安装：pip install aiohttp"])
+        return
+
+    try:
+        take = int(getattr(self._cfg, "cozynook_search_take", 20) or 20)
+    except Exception:
+        take = 20
+    take = max(1, min(int(take), 50))
+
+    session = None
+    close_session = False
+    try:
+        timeout = aiohttp.ClientTimeout(total=max(int(getattr(self._cfg, "cozynook_timeout_sec", 20) or 20), 1))
+        headers = {"User-Agent": _get_user_agent()}
+        if cookie:
+            headers["Cookie"] = cookie
+
+        session = aiohttp.ClientSession(timeout=timeout, headers=headers)
+        close_session = True
+
+        # 先确保已加入频道（且拿到 channelId）
+        j_status, j_data = await _cozyverse_join_channel_by_invite_async(
+            code=code,
+            password=join_password,
+            cookie=cookie,
+            session=session,
+        )
+        if not (isinstance(j_data, dict) and j_data.get("ok")):
+            if int(j_status or 0) == 401:
+                yield _yield_merged_text(["登录态已失效：已退出。", "请更新 cozynook_sid_cookie 后重试。"])
+                return
+
+            detail = ""
+            if isinstance(j_data, dict):
+                detail = str(j_data.get("detail") or "").strip()
+            if int(j_status or 0) == 403 and detail == "password_required":
+                yield _yield_merged_text(
+                    [
+                        "加入频道失败：该分享码需要频道密码（password_required）。",
+                        "请在插件配置里填写 cozynook_channel_join_password 后重试。",
+                    ]
+                )
+                return
+
+            suffix = f"（status={int(j_status or 0)}{', detail=' + detail if detail else ''}）"
+            yield _yield_merged_text([f"加入频道失败：已退出。{suffix}"])
+            return
+
+        try:
+            channel_id = int(j_data.get("channelId") or 0)
+        except Exception:
+            channel_id = 0
+        if channel_id <= 0:
+            yield _yield_merged_text(["加入频道失败：已退出。"])
+            return
+
+        # 直接调用 Cozyverse 搜索栏 v1 接口：按简介 [tag] 搜索（intro_tags）
+        url = (
+            f"{COZYNOOK_API_BASE}/v1/channels/{int(channel_id)}/search"
+            f"?mode=intro_tags&q={urllib.parse.quote(kw_raw)}"
+            f"&limit={int(take)}&order=desc"
+        )
+
+        # 这里不复用 _http_get_json_with_status_async：需要在解析失败时拿到原始响应片段做诊断。
+        status = 0
+        data: dict[str, Any] = {}
+        raw_text_preview = ""
+        try:
+            async with session.get(_normalize_url(url), headers=headers, timeout=timeout) as resp:
+                status = int(resp.status)
+                raw = await resp.read()
+                # 先尝试 JSON
+                try:
+                    obj = json.loads(raw.decode("utf-8", errors="replace"))
+                    data = obj if isinstance(obj, dict) else {}
+                except Exception:
+                    # 非 JSON（例如 404 HTML / 反代错误页）
+                    s = raw.decode("utf-8", errors="replace")
+                    s = s.replace("\r\n", "\n")
+                    raw_text_preview = (s[:240] + ("..." if len(s) > 240 else "")).strip()
+        except Exception as ex:
+            yield _yield_merged_text([f"搜索失败：网络请求异常：{ex!s}", "已退出。"])
+            return
+
+        if int(status or 0) == 401:
+            yield _yield_merged_text(["登录态已失效：已退出。", "请更新 cozynook_sid_cookie 后重试。"])
+            return
+        if int(status or 0) == 403:
+            yield _yield_merged_text(["无权限：需要先加入频道（或登录态不属于该频道成员）。", "已退出。"])
+            return
+
+        if not (isinstance(data, dict) and data.get("ok")):
+            detail = str(data.get("detail") or "").strip() if isinstance(data, dict) else ""
+            lines = [f"搜索失败：接口未返回 ok（status={int(status or 0)}{', detail=' + detail if detail else ''}）。"]
+            if raw_text_preview:
+                lines.append(f"响应片段：{raw_text_preview}")
+            lines.append("已退出。")
+            yield _yield_merged_text(lines)
+            return
+
+        items = data.get("items")
+        if not isinstance(items, list):
+            items = []
+
+        if not items:
+            yield _yield_merged_text([f"未找到匹配标签「{kw_raw}」的卡片。", "已退出。"])
+            return
+
+        # 只保留带 ULA 的结果（postPwd 为空表示未公开密码或无权查看）
+        with_pwd: list[dict[str, Any]] = []
+        for p in items:
+            if not isinstance(p, dict):
+                continue
+            pwd = str(p.get("postPwd") or "").strip()
+            if not pwd:
+                continue
+            with_pwd.append(p)
+
+        if not with_pwd:
+            yield _yield_merged_text(
+                [
+                    f"找到 {len(items)} 条匹配，但都没有可见的 ULA（可能未公开密码或权限不足）。",
+                    "已退出。",
+                ]
+            )
+            return
+
+        lines: list[str] = []
+        lines.append(f"【卡片小屋】按简介标签搜索：{kw_raw}")
+        lines.append(f"匹配到 {len(with_pwd)} 条（展示前 {min(len(with_pwd), take)} 条）")
+        for i, p in enumerate(with_pwd[:take], 1):
+            title = str(p.get("title") or "").strip() or "(无标题)"
+            pwd = str(p.get("postPwd") or "").strip()
+            if len(title) > 60:
+                title = title[:60] + "…"
+            lines.append(f"{i}. {title} — {pwd}")
+
+        lines.append("\n可用指令：/获取卡片 ula-xxxx（查看帖子） /导入卡片 ula-xxxx（导入）")
+        yield _yield_merged_text(lines)
+    finally:
+        if close_session and session is not None:
+            try:
+                await session.close()
+            except Exception:
+                pass
+
+
 async def cozynook_get(self, event: AstrMessageEvent, arg, *, allow_import: bool, mode: str | None = None):
-    """/获取卡片 与 /导入角色 /导出角色 的统一入口。
+    """/获取卡片 与 /导入卡片 /导出卡片 的统一入口。
 
     mode:
       - None: 交互式询问导入/导出
@@ -1409,7 +1632,7 @@ async def cozynook_get(self, event: AstrMessageEvent, arg, *, allow_import: bool
     try:
         # 复用同一个 aiohttp session：获取帖子 + 拉评论 + 后续导入/导出下载共享连接池
         if not _AIOHTTP_AVAILABLE or aiohttp is None:
-            yield event.plain_result("缺少依赖 aiohttp，无法访问角色小屋接口。请安装：pip install aiohttp")
+            yield event.plain_result("缺少依赖 aiohttp，无法访问卡片小屋接口。请安装：pip install aiohttp")
             return
 
         timeout = aiohttp.ClientTimeout(total=max(int(getattr(self._cfg, "cozynook_timeout_sec", 20) or 20), 1))
@@ -1521,7 +1744,7 @@ async def cozynook_get(self, event: AstrMessageEvent, arg, *, allow_import: bool
             nodes: list[Comp.Node] = []
             uin = str(event.get_self_id())
             for p in parts:
-                nodes.append(Comp.Node(uin=uin, name="角色小屋", content=[Plain(p)]))
+                nodes.append(Comp.Node(uin=uin, name="卡片小屋", content=[Plain(p)]))
             yield event.chain_result([Comp.Nodes(nodes)])
     else:
         merged = _format_post_text(
@@ -1537,7 +1760,7 @@ async def cozynook_get(self, event: AstrMessageEvent, arg, *, allow_import: bool
         nodes: list[Comp.Node] = []
         uin = str(event.get_self_id())
         for p in parts:
-            nodes.append(Comp.Node(uin=uin, name="角色小屋", content=[Plain(p)]))
+            nodes.append(Comp.Node(uin=uin, name="卡片小屋", content=[Plain(p)]))
         yield event.chain_result([Comp.Nodes(nodes)])
 
     mode_norm = (mode or "").strip().lower()
@@ -1567,7 +1790,7 @@ async def cozynook_get(self, event: AstrMessageEvent, arg, *, allow_import: bool
         "请选择操作：\n"
         "- /导入：导入为你的人设（不使用前后置提示词）\n"
         "- /导出：导出帖子内容/附件\n"
-        "也可直接用命令：/导入角色 ula-xxxx 或 /导出角色 ula-xxxx"
+        "也可直接用命令：/导入卡片 ula-xxxx 或 /导出卡片 ula-xxxx"
     )
 
     timeout = int(getattr(self._cfg, "session_timeout_sec", 300) or 300)
@@ -1628,7 +1851,7 @@ async def cozynook_get(self, event: AstrMessageEvent, arg, *, allow_import: bool
         await e.send(
             e.plain_result(
                 "未选择操作，已退出。需要导入/导出请重新发送：/获取卡片 ula-xxxx\n"
-                "或直接用：/导入角色 ula-xxxx /导出角色 ula-xxxx"
+                "或直接用：/导入卡片 ula-xxxx /导出卡片 ula-xxxx"
             )
         )
         controller.stop()
@@ -1724,7 +1947,7 @@ async def _handle_import_flow(
     timeout = int(getattr(self._cfg, "session_timeout_sec", 300) or 300)
     initial_sender_id = str(event.get_sender_id())
 
-    yield event.plain_result("请输入角色名称")
+    yield event.plain_result("请输入卡片名称")
     state: dict[str, Any] = {
         "name": "",
         "intro": "",
@@ -1756,14 +1979,14 @@ async def _handle_import_flow(
         if state["stage"] == "name":
             state["name"] = text.strip()
             state["stage"] = "intro"
-            await e.send(e.plain_result("请输入角色简介"))
+            await e.send(e.plain_result("请输入卡片简介"))
             controller.keep(timeout=timeout, reset_timeout=True)
             return
 
         if state["stage"] == "intro":
             state["intro"] = text.strip()
             state["stage"] = "tags"
-            await e.send(e.plain_result("请输入角色标签（空格分隔，可留空输入 /跳过）"))
+            await e.send(e.plain_result("请输入卡片标签（空格分隔，可留空输入 /跳过）"))
             controller.keep(timeout=timeout, reset_timeout=True)
             return
 
@@ -1863,7 +2086,7 @@ async def _handle_import_flow(
                 state["stage"] = "clean_regex"
                 await e.send(
                     e.plain_result(
-                        "请输入正则表达式（用于清洗注入的角色内容：re.sub(pattern, '', text)）。\n"
+                        "请输入正则表达式（用于清洗注入的卡片内容：re.sub(pattern, '', text)）。\n"
                         "输入 /跳过 表示不设置。"
                     )
                 )
@@ -1988,7 +2211,7 @@ async def _handle_import_flow(
 
     name = (state.get("name") or "").strip()
     if not name:
-        yield event.plain_result("缺少角色名称，已取消导入。")
+        yield event.plain_result("缺少卡片名称，已取消导入。")
         return
 
     user_intro = (state.get("intro") or "").strip()
@@ -2066,7 +2289,7 @@ async def _handle_import_flow(
         yield event.plain_result("导入失败，请稍后重试。")
         return
 
-    yield event.plain_result(f"已导入角色：{name}（已切回休息模式）")
+    yield event.plain_result(f"已导入卡片：{name}（已切回休息模式）")
 
 
 def _parse_number_picks(text: str) -> list[int]:

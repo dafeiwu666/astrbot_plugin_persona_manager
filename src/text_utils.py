@@ -62,7 +62,7 @@ def is_finish_edit_command(text: str) -> bool:
         return False
     t = t.lstrip("/／").strip()
     t = t.split()[0] if t.split() else ""
-    return t in {"结束角色编辑", "结束角色"}
+    return t in {"结束卡片编辑", "结束卡片"}
 
 
 def truncate_text(text: str, max_length: int = 30) -> str:

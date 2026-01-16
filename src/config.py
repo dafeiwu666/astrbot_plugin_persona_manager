@@ -33,7 +33,7 @@ class PersonaPluginConfig(BaseModel):
     # - 完整片段：sid=abcdefg...
     cozynook_sid_cookie: str = ""
 
-    # Cozyverse v1：拉取评论条数（用于 /角色小屋 展示“最新评论”）。
+    # Cozyverse v1：拉取评论条数（用于 /卡片小屋 展示“最新评论”）。
     # 后端强制 page_size <= 50；这里也强制不超过 50。
     cozynook_comments_take: int = 10
 
@@ -42,12 +42,22 @@ class PersonaPluginConfig(BaseModel):
     # - True: 尝试渲染预览图并发送（需要可选依赖 Pillow 与可用字体；失败会回退文本）
     cozynook_use_preview_image: bool = False
 
-    # CozyNook：/角色小屋 从指定频道随机抽卡数量（1-30）。
+    # CozyNook：/卡片小屋 从指定频道随机抽卡数量（1-30）。
     cozynook_channel_cards_pick: int = 15
 
     # CozyNook：预览图字体路径（可选）。
     # 仅在未来启用图片预览渲染时使用；留空则使用内置候选路径探测。
     cozynook_preview_font_path: str = ""
+
+    # CozyNook：卡片小屋频道分享码。
+    # - 留空：使用代码内置默认分享码
+    # - 填写：覆盖默认分享码
+    cozynook_channel_invite_code: str = ""
+
+    # CozyNook：加入卡片小屋频道所需的密码（可选）。
+    # - 留空：不传 password
+    # - 填写：加入频道时带上 password
+    cozynook_channel_join_password: str = ""
     
     # 昵称同步配置
     sync_nickname_on_switch: bool = False
@@ -66,6 +76,18 @@ class PersonaPluginConfig(BaseModel):
     @classmethod
     def _coerce_keyword_persona_triggers(cls, v: Any) -> str:
         # 某些加载器/面板会把配置值包一层 {"value": ...}
+        if isinstance(v, dict) and "value" in v:
+            v = v.get("value")
+        if v is None:
+            return ""
+        try:
+            return str(v)
+        except Exception:
+            return ""
+
+    @field_validator("cozynook_channel_invite_code", "cozynook_channel_join_password", mode="before")
+    @classmethod
+    def _coerce_cozynook_text_fields(cls, v: Any) -> str:
         if isinstance(v, dict) and "value" in v:
             v = v.get("value")
         if v is None:

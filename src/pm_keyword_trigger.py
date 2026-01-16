@@ -32,7 +32,7 @@ async def keyword_trigger_llm(self, event: AstrMessageEvent):
 
     matched_keyword, prompt = matched
 
-    # 外部角色一致性拦截（仅对“关键词触发”生效）：
+    # 外部 persona 一致性拦截（仅对“关键词触发”生效）：
     # - 不发起 LLM
     # - 不计入额度
     unified_external_id = self._cfg.external_persona_id.strip()
@@ -40,7 +40,7 @@ async def keyword_trigger_llm(self, event: AstrMessageEvent):
         current_external_id = await self._get_current_external_persona_id(event)
         if current_external_id and current_external_id != unified_external_id:
             event.stop_event()
-            await event.send(event.plain_result("检测到不为小屋内人设，已拦截本次关键词触发。"))
+            await event.send(event.plain_result("检测到外部 persona 已被切换（不为配置的统一外部 persona），已拦截本次关键词触发。"))
             return
 
     # 记录触发日志

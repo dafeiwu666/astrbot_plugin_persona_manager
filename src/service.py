@@ -162,7 +162,7 @@ class PersonaService:
         """切换当前人设（群聊按 group_id、私聊按 user_id）。
 
         群聊上下文允许：
-        - 切换到调用者自己的角色（会记录 owner_user_id=user_id）
+        - 切换到调用者自己的卡片（会记录 owner_user_id=user_id）
         - 切换到空人设
         """
         gid = self._normalize_group_id(group_id)
@@ -189,7 +189,7 @@ class PersonaService:
                 await self._repo.save(store)
                 return Scope.USER
 
-            # 仅允许切换到调用者自己的角色
+            # 仅允许切换到调用者自己的卡片
             if name in user_bucket.personas:
                 _set_current(
                     CurrentSelection(
@@ -387,7 +387,7 @@ class PersonaService:
         return None
 
     async def delete_user_persona(self, *, user_id: str, name: str) -> tuple[bool, str]:
-        """删除用户角色。
+        """删除用户卡片。
         
         Returns:
             (success, message)
@@ -399,7 +399,7 @@ class PersonaService:
             bucket = store.ensure_user(user_id)
 
             if name not in bucket.personas:
-                return False, "角色不存在。"
+                return False, "卡片不存在。"
 
             del bucket.personas[name]
 
@@ -416,7 +416,7 @@ class PersonaService:
     async def get_user_persona(
         self, *, user_id: str, name: str
     ) -> UserPersona | None:
-        """获取用户的角色。"""
+        """获取用户的卡片。"""
         store = await self._repo.load()
         bucket = store.ensure_user(user_id)
         return bucket.personas.get(name)
@@ -424,7 +424,7 @@ class PersonaService:
     async def can_edit_persona(
         self, *, user_id: str, name: str
     ) -> tuple[bool, str]:
-        """检查是否可以修改角色设定。
+        """检查是否可以修改卡片设定。
         
         Returns:
             (can_edit, reason)
@@ -436,7 +436,7 @@ class PersonaService:
         
         persona = bucket.personas.get(name)
         if not persona:
-            return False, "角色不存在或不属于你"
+            return False, "卡片不存在或不属于你"
         
         return True, ""
 
@@ -450,7 +450,7 @@ class PersonaService:
         use_wrapper: bool,
         tags: list[str] | None = None,
     ) -> bool:
-        """更新用户角色的内容（不改名字）。
+        """更新用户卡片的内容（不改名字）。
         
         Returns:
             True if updated successfully, False if persona not found or not editable

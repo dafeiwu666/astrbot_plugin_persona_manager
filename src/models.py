@@ -23,7 +23,7 @@ class CurrentSelection(BaseModel):
     scope: Scope
     name: str
     # 当 scope=USER 且该选择用于群聊上下文时，记录“该人设属于哪个用户”，
-    # 以便群聊按 group_id 存储选择、但仍能解析到创建者的用户角色内容。
+    # 以便群聊按 group_id 存储选择、但仍能解析到创建者的用户卡片内容。
     owner_user_id: str = ""
     ts: int = 0
 
@@ -55,7 +55,7 @@ class UserPersona(BaseModel):
     wrapper_prefix: str = ""
     wrapper_suffix: str = ""
 
-    # 注入文本清洗：在注入角色内容前对 persona.content 做正则清洗
+    # 注入文本清洗：在注入卡片内容前对 persona.content 做正则清洗
     # - clean_use_config=True  -> 使用 conf.default_clean_regex
     # - clean_use_config=False -> 使用 clean_regex（为空则不清洗）
     clean_use_config: bool = False

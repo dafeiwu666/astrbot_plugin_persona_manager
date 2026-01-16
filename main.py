@@ -24,7 +24,7 @@ from .src import pm_commands_cozynook as _pm_commands_cozynook
 
 
 class Main(Star):
-    """角色社区化人设管理（会话添加/列表转发/注入前后缀/正则清洗 + CozyNook 角色小屋）"""
+    """卡片社区化人设管理（会话添加/卡包转发/注入前后缀/正则清洗 + CozyNook 卡片小屋）"""
 
     def __init__(self, context: Context, config: dict | None = None):
         super().__init__(context)
@@ -44,7 +44,7 @@ class Main(Star):
         self._kw_trigger_raw: str | None = None
         self._kw_triggers: list[tuple[str, str, str]] = []  # (mode, keyword, prompt)
         
-        logger.info(f"角色社区化人设管理 昵称同步配置：{self._nickname_sync.describe_settings()}")
+        logger.info(f"卡片社区化人设管理 昵称同步配置：{self._nickname_sync.describe_settings()}")
 
     def _now_ts(self) -> int:
         return int(time.time())
@@ -172,7 +172,7 @@ class Main(Star):
             self_id = self._safe_str(event.get_self_id())
             return bool(sender_id and self_id and sender_id == self_id)
         except Exception as ex:
-            logger.debug(f"角色社区化人设管理 _is_self_message_event 异常：{ex!r}")
+            logger.debug(f"卡片社区化人设管理 _is_self_message_event 异常：{ex!r}")
             return False
 
     def _is_empty_echo_event(self, event: AstrMessageEvent) -> bool:
@@ -192,7 +192,7 @@ class Main(Star):
                 msgs = []
             return len(msgs) == 0
         except Exception as ex:
-            logger.debug(f"角色社区化人设管理 _is_empty_echo_event 异常：{ex!r}")
+            logger.debug(f"卡片社区化人设管理 _is_empty_echo_event 异常：{ex!r}")
             return False
 
     @staticmethod
@@ -336,7 +336,7 @@ class Main(Star):
             try:
                 platform = self._safe_str(get_pid()).lower()
             except Exception as ex:
-                logger.debug(f"角色社区化人设管理 get_platform_id 调用异常：{ex!r}")
+                logger.debug(f"卡片社区化人设管理 get_platform_id 调用异常：{ex!r}")
         if origin and platform:
             keys.append(f"{platform}:origin:{origin}")
 
@@ -418,10 +418,10 @@ class Main(Star):
         return None
 
     async def _switch_external_persona(self, event: AstrMessageEvent) -> None:
-        """切换对话内的外部角色（通过 AstrBot 的 persona 管理器）。
-        
-        无论切换到哪个插件内角色，都统一切换到配置的外部角色。
-        
+        """切换对话内的外部 persona（通过 AstrBot 的 persona 管理器）。
+
+        无论切换到哪个插件内卡片，都统一切换到配置的外部 persona。
+
         Args:
             event: 消息事件
         """
@@ -433,7 +433,7 @@ class Main(Star):
             # 获取外部 persona 以验证其存在
             await self.context.persona_manager.get_persona(external_id)
             
-            # 切换当前对话的外部角色
+            # 切换当前对话的外部 persona
             unified_msg_origin = event.unified_msg_origin
             cid = await self.context.conversation_manager.get_curr_conversation_id(
                 unified_msg_origin
@@ -447,12 +447,12 @@ class Main(Star):
                     persona_id=external_id,
                     history=None,  # 保留历史记录
                 )
-                logger.info(f"已同步切换外部角色至：{external_id}")
+                logger.info(f"已同步切换外部 persona 至：{external_id}")
         except ValueError:
             # 外部 persona 不存在
-            logger.warning(f"外部角色切换失败：{external_id}（外部角色不存在）")
+            logger.warning(f"外部 persona 切换失败：{external_id}（外部 persona 不存在）")
         except Exception as ex:
-            logger.error(f"切换外部角色失败：{ex}")
+            logger.error(f"切换外部 persona 失败：{ex}")
 
     @staticmethod
     def _extract_external_persona_display_name(external_persona: object) -> str | None:
@@ -724,26 +724,26 @@ class Main(Star):
         *args: object,
         **kwargs: object,
     ):
-        """LLM 请求时：注入当前角色设定到 system prompt。"""
+        """LLM 请求时：注入当前卡片设定到 system prompt。"""
         await _pm_llm_hook.inject_persona(self, event, req)
 
     # -------------------------
     # commands
     # -------------------------
 
-    @filter.command("创建角色")
+    @filter.command("创建卡片")
     async def add_persona(self, event: AstrMessageEvent, 名称: GreedyStr):
-        """平台消息下发时：创建角色（会话式引导输入简介/标签/前后置/清洗/设定）。"""
+        """平台消息下发时：创建卡片（会话式引导输入简介/标签/前后置/清洗/设定）。"""
         async for r in _pm_commands_basic.add_persona(self, event, 名称):
             yield r
 
-    @filter.command("角色列表")
+    @filter.command("卡包")
     async def list_personas(self, event: AstrMessageEvent):
-        """平台消息下发时：列出你的角色列表（合并转发）。"""
+        """平台消息下发时：列出你的卡包（合并转发）。"""
         async for r in _pm_commands_basic.list_personas(self, event):
             yield r
 
-    @filter.command("角色小屋")
+    @filter.command("卡片小屋")
     async def cozynook_market(self, event: AstrMessageEvent, 分区: GreedyStr = GreedyStr("")):
         """平台消息下发时：从指定分享码频道随机抽取卡片（可选按分区）。"""
         async for r in _pm_commands_cozynook.cozynook_draw_channel_cards(self, event, 分区):
@@ -756,9 +756,9 @@ class Main(Star):
         async for r in _pm_commands_cozynook.cozynook_get(self, event, 密码或ULA, allow_import=True):
             yield r
 
-    @filter.command("导入角色")
+    @filter.command("导入卡片")
     async def cozynook_import_role(self, event: AstrMessageEvent, 密码或ULA: GreedyStr):
-        """平台消息下发时：从 CozyNook 导入为本地角色（含前后置/清洗选项）。"""
+        """平台消息下发时：从 CozyNook 导入为本地卡片（含前后置/清洗选项）。"""
         # 显式导入命令：跳过“/导入 /导出”选择
         async for r in _pm_commands_cozynook.cozynook_get(
             self,
@@ -769,7 +769,7 @@ class Main(Star):
         ):
             yield r
 
-    @filter.command("导出角色")
+    @filter.command("导出卡片")
     async def cozynook_export_role(self, event: AstrMessageEvent, 密码或ULA: GreedyStr):
         """平台消息下发时：从 CozyNook 导出附件/内容。"""
         # 显式导出命令：跳过“/导入 /导出”选择
@@ -782,46 +782,46 @@ class Main(Star):
         ):
             yield r
 
-    @filter.command("查找角色")
+    @filter.command("查找卡片")
     async def search_personas(self, event: AstrMessageEvent):
-        """平台消息下发时：按标签查找角色（会话式输入标签）。"""
+        """平台消息下发时：查找卡片（卡包按标签；小屋按关键词）。"""
         async for r in _pm_commands_basic.search_personas(self, event):
             yield r
 
-    @filter.command("切换角色")
+    @filter.command("切换卡片")
     async def switch_persona(self, event: AstrMessageEvent, 名称: GreedyStr):
-        """平台消息下发时：切换当前会话使用的角色。"""
+        """平台消息下发时：切换当前会话使用的卡片。"""
         async for r in _pm_commands_basic.switch_persona(self, event, 名称):
             yield r
 
     @filter.command("休息模式")
     async def switch_to_empty_persona(self, event: AstrMessageEvent):
-        """平台消息下发时：进入休息模式（不注入任何角色）。"""
+        """平台消息下发时：进入休息模式（不注入任何卡片）。"""
         async for r in _pm_commands_basic.switch_to_empty_persona(self, event):
             yield r
 
-    @filter.command("当前角色")
+    @filter.command("当前卡片")
     async def current_persona(self, event: AstrMessageEvent):
-        """平台消息下发时：查看当前会话正在使用的角色。"""
+        """平台消息下发时：查看当前会话正在使用的卡片。"""
         async for r in _pm_commands_basic.current_persona(self, event):
             yield r
 
-    @filter.command("查看角色")
+    @filter.command("查看卡片")
     async def view_persona(self, event: AstrMessageEvent, 名称: GreedyStr):
-        """平台消息下发时：查看指定角色详情。"""
+        """平台消息下发时：查看指定卡片详情。"""
         async for r in _pm_commands_basic.view_persona(self, event, 名称):
             yield r
 
-    @filter.command("删除角色")
+    @filter.command("删除卡片")
     async def delete_persona(self, event: AstrMessageEvent, 名称: GreedyStr):
-        """平台消息下发时：删除指定角色。"""
+        """平台消息下发时：删除指定卡片。"""
         async for r in _pm_commands_basic.delete_persona(self, event, 名称):
             yield r
 
-    @filter.command("修改设定")
+    @filter.command("修改卡片")
     async def edit_persona(self, event: AstrMessageEvent, 名称: GreedyStr):
-        """平台消息下发时：修改角色设定（会话式交互）。"""
+        """平台消息下发时：修改卡片（会话式交互）。"""
         async for r in _pm_commands_basic.edit_persona(self, event, 名称):
             yield r
 
-    # 审核/市场相关命令已移除：仅保留“人设”与 CozyNook 角色小屋能力。
+    # 审核/市场相关命令已移除：仅保留“人设”与 CozyNook 卡片小屋能力。

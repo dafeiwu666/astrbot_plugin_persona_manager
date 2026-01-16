@@ -2,7 +2,7 @@
   "enabled": {
     "type": "bool",
     "default": true,
-    "description": "是否启用角色社区化人设管理插件"
+    "description": "是否启用卡片社区化人设管理插件"
   },
   "whitelist_user_ids": {
     "type": "list",
@@ -27,18 +27,18 @@
   "default_prefix": {
     "type": "text",
     "default": "",
-    "description": "默认前置提示词（注入格式：前置+当前角色+后置）"
+    "description": "默认前置提示词（注入格式：前置+当前卡片+后置）"
   },
   "default_suffix": {
     "type": "text",
     "default": "",
-    "description": "默认后置提示词（注入格式：前置+当前角色+后置）"
+    "description": "默认后置提示词（注入格式：前置+当前卡片+后置）"
   },
   "default_clean_regex": {
     "type": "text",
     "default": "",
     "description": "默认正则文本清洗表达式",
-    "hint": "在注入角色内容前，对角色内容执行 re.sub(pattern, '', text)。留空表示不启用清洗。"
+    "hint": "在注入卡片内容前，对卡片内容执行 re.sub(pattern, '', text)。留空表示不启用清洗。"
   },
   "session_timeout_sec": {
     "type": "int",
@@ -51,22 +51,34 @@
     "description": "Cozyverse 登录态 Cookie",
     "hint": "用于访问 v1 插件接口拉取评论等需要鉴权的内容(前往网站登录后f12查看)。可填 cv_auth=... 或 cv_sid 的值；也可填 cv_sid=xxx / sid=xxx / 任意完整 Cookie 片段，如：cv_auth=...; cv_sid=..."
   },
+  "cozynook_channel_invite_code": {
+    "type": "text",
+    "default": "XB-U43BKP3B4DSA2ZNN",
+    "description": "卡片小屋频道分享码（可覆盖）",
+    "hint": "留空则使用代码内置默认分享码；填写则覆盖默认分享码。格式应为 xb-16位，例如：XB-U43BKP3B4DSA2ZNN"
+  },
+  "cozynook_channel_join_password": {
+    "type": "text",
+    "default": "",
+    "description": "卡片小屋频道密码（可选）",
+    "hint": "频道分享码若启用了密码，请在此填写。留空表示不传 password。"
+  },
   "cozynook_comments_take": {
     "type": "int",
     "default": 10,
     "description": "最新评论条数",
-    "hint": "角色小屋展示的最新评论条数（0-50，最大 50；超过会被强制压到 50）。填 0 表示不拉取评论。"
+    "hint": "卡片小屋展示的最新评论条数（0-50，最大 50；超过会被强制压到 50）。填 0 表示不拉取评论。"
   },
   "cozynook_use_preview_image": {
     "type": "bool",
     "default": false,
-    "description": "角色小屋使用图片预览渲染",
+    "description": "卡片小屋使用图片预览渲染",
     "hint": "开启后将尝试把帖子内容渲染成预览图并发送（需要可选依赖 Pillow 与可用字体；若渲染失败会自动回退为合并转发文本）。关闭则使用合并转发文本展示。"
   },
   "cozynook_channel_cards_pick": {
     "type": "int",
     "default": 15,
-    "description": "角色小屋频道抽卡数量",
+    "description": "卡片小屋频道抽卡数量",
     "hint": "从指定分享码频道随机抽取卡片数量（1-30，最大 30）。"
   },
   "cozynook_preview_font_path": {
@@ -78,13 +90,13 @@
   "external_persona_id": {
     "type": "text",
     "default": "",
-    "hint": "插件外统一角色ID。填写后，无论切换到哪个插件内角色，对话内都会同步切换到此外部角色（仅限对话内）",
-    "description": "统一外部角色ID"
+    "hint": "插件外统一 persona ID。填写后，无论切换到哪个插件内卡片，对话内都会同步切换到此外部 persona（仅限对话内）",
+    "description": "统一外部 persona ID"
   },
   "sync_nickname_on_switch": {
     "type": "bool",
     "default": false,
-    "description": "切换角色时是否同步修改QQ昵称/群名片（仅支持 aiocqhttp 平台）"
+    "description": "切换卡片时是否同步修改QQ昵称/群名片（仅支持 aiocqhttp 平台）"
   },
   "nickname_sync_mode": {
     "type": "text",
@@ -102,12 +114,12 @@
     "type": "bool",
     "default": false,
     "description": "自动重置聊天记录",
-    "hint": "切换角色时自动重置聊天记录（包括切换到休息模式、角色被删除自动切回休息模式等所有角色变化情况）"
+    "hint": "切换卡片时自动重置聊天记录（包括切换到休息模式、卡片被删除自动切回休息模式等所有卡片变化情况）"
   },
   "keyword_persona_triggers": {
     "type": "text",
     "default": "",
     "description": "关键词触发 LLM 回复（每行一条：关键词:提示词）",
-    "hint": "示例：\n你好:你是客服，请用简短礼貌的语气回答。\n~帮助:你是说明书助手，直接给出用法步骤。\n\n规则：\n- 关键词前加 ~ 表示包含匹配（大小写不敏感）\n- 不加 ~ 表示去除所有空白字符后完全匹配（大小写敏感）\n- 触发时仅注入右侧填写的提示词，不注入前后置提示词与当前角色"
+    "hint": "示例：\n你好:你是客服，请用简短礼貌的语气回答。\n~帮助:你是说明书助手，直接给出用法步骤。\n\n规则：\n- 关键词前加 ~ 表示包含匹配（大小写不敏感）\n- 不加 ~ 表示去除所有空白字符后完全匹配（大小写敏感）\n- 触发时仅注入右侧填写的提示词，不注入前后置提示词与当前卡片"
   }
 }

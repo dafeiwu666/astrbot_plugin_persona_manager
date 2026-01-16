@@ -141,7 +141,7 @@ async def _advance_add_persona_session(
             state.clean_use_config = True
             state.clean_regex = ""
             state.stage = PersonaEditStage.CONTENT
-            await e.send(e.plain_result("请输入角色设定"))
+            await e.send(e.plain_result("请输入卡片设定"))
             controller.keep(timeout=timeout, reset_timeout=True)
             return
         if choice in {"no", "custom"}:
@@ -149,7 +149,7 @@ async def _advance_add_persona_session(
             state.stage = PersonaEditStage.CLEAN_REGEX
             await e.send(
                 e.plain_result(
-                    "请输入正则表达式（用于清洗注入的角色内容：re.sub(pattern, '', text)）。\n"
+                    "请输入正则表达式（用于清洗注入的卡片内容：re.sub(pattern, '', text)）。\n"
                     "输入 /跳过 表示不设置。"
                 )
             )
@@ -159,7 +159,7 @@ async def _advance_add_persona_session(
             state.clean_use_config = False
             state.clean_regex = ""
             state.stage = PersonaEditStage.CONTENT
-            await e.send(e.plain_result("请输入角色设定"))
+            await e.send(e.plain_result("请输入卡片设定"))
             controller.keep(timeout=timeout, reset_timeout=True)
             return
         await e.send(e.plain_result("请输入：/是 /否 /跳过"))
@@ -169,7 +169,7 @@ async def _advance_add_persona_session(
         if parse_command_choice(text) == "skip":
             state.clean_regex = ""
             state.stage = PersonaEditStage.CONTENT
-            await e.send(e.plain_result("请输入角色设定"))
+            await e.send(e.plain_result("请输入卡片设定"))
             controller.keep(timeout=timeout, reset_timeout=True)
             return
 
@@ -186,22 +186,22 @@ async def _advance_add_persona_session(
             return
         state.clean_regex = pattern
         state.stage = PersonaEditStage.CONTENT
-        await e.send(e.plain_result("请输入角色设定"))
+        await e.send(e.plain_result("请输入卡片设定"))
         controller.keep(timeout=timeout, reset_timeout=True)
 
     async def _handle_content() -> None:
         if not text:
-            await e.send(e.plain_result("请输入角色设定"))
+            await e.send(e.plain_result("请输入卡片设定"))
             controller.keep(timeout=timeout, reset_timeout=True)
             return
         state.add_part(text)
         state.stage = PersonaEditStage.CONTINUE
-        await e.send(e.plain_result("是否继续，继续则输入内容，结束输入/结束角色编辑"))
+        await e.send(e.plain_result("是否继续，继续则输入内容，结束输入/结束卡片编辑"))
         controller.keep(timeout=timeout, reset_timeout=True)
 
     async def _handle_continue() -> None:
         state.add_part(text)
-        await e.send(e.plain_result("是否继续，继续则输入内容，结束输入/结束角色编辑"))
+        await e.send(e.plain_result("是否继续，继续则输入内容，结束输入/结束卡片编辑"))
         controller.keep(timeout=timeout, reset_timeout=True)
 
     stage_handlers = {
@@ -281,8 +281,8 @@ async def _advance_edit_persona_session(
         preview = current_content[:200] + ("..." if len(current_content) > 200 else "")
         await e.send(
             e.plain_result(
-                f"当前角色设定预览：\n{preview}\n\n"
-                "请输入新的角色设定（直接输入覆盖，输入 /保持 则不修改）"
+                f"当前卡片设定预览：\n{preview}\n\n"
+                "请输入新的卡片设定（直接输入覆盖，输入 /保持 则不修改）"
             )
         )
         controller.keep(timeout=timeout, reset_timeout=True)
@@ -293,7 +293,7 @@ async def _advance_edit_persona_session(
             await e.send(
                 e.plain_result(
                     "内容保持不变。\n"
-                    "是否继续编辑，继续则输入内容，结束输入 /结束角色编辑"
+                    "是否继续编辑，继续则输入内容，结束输入 /结束卡片编辑"
                 )
             )
         else:
@@ -301,12 +301,12 @@ async def _advance_edit_persona_session(
             if text:
                 state.add_part(text)
             state.stage = PersonaEditStage.CONTINUE
-            await e.send(e.plain_result("是否继续，继续则输入内容，结束输入 /结束角色编辑"))
+            await e.send(e.plain_result("是否继续，继续则输入内容，结束输入 /结束卡片编辑"))
         controller.keep(timeout=timeout, reset_timeout=True)
 
     async def _handle_continue() -> None:
         state.add_part(text)
-        await e.send(e.plain_result("是否继续，继续则输入内容，结束输入 /结束角色编辑"))
+        await e.send(e.plain_result("是否继续，继续则输入内容，结束输入 /结束卡片编辑"))
         controller.keep(timeout=timeout, reset_timeout=True)
 
     stage_handlers = {
@@ -352,7 +352,7 @@ async def add_persona(self, event: AstrMessageEvent, name: GreedyStr):
     # 部分框架/适配器在缺参时可能把类型名或 None 的字符串化结果塞进来，这里做显式拦截。
     name = str(name or "").strip()
     if (not name) or (name.casefold() in {"none", "greedystr"}):
-        yield event.plain_result("缺少角色名称，请使用：/创建角色 名称")
+        yield event.plain_result("缺少卡片名称，请使用：/创建卡片 名称")
         return
 
     yield event.plain_result("请输入简介")
@@ -377,7 +377,7 @@ async def add_persona(self, event: AstrMessageEvent, name: GreedyStr):
             return
 
         # 避免把触发命令的那条消息当作会话输入（不同版本里 event 可能不是同一对象）。
-        if e is initial_event or self._looks_like_command_message(getattr(e, "message_str", "") or "", "创建角色"):
+        if e is initial_event or self._looks_like_command_message(getattr(e, "message_str", "") or "", "创建卡片"):
             controller.keep(timeout=timeout, reset_timeout=True)
             return
 
@@ -392,7 +392,7 @@ async def add_persona(self, event: AstrMessageEvent, name: GreedyStr):
         # 显式退出：/取消 /退出
         if token in {"取消", "退出", "中断"}:
             e.stop_event()
-            await e.send(e.plain_result("已退出角色创建流程。"))
+            await e.send(e.plain_result("已退出卡片创建流程。"))
             controller.stop()
             return
 
@@ -418,13 +418,13 @@ async def add_persona(self, event: AstrMessageEvent, name: GreedyStr):
                     clean_regex=state.clean_regex,
                     tags=state.tags,
                 )
-                await e.send(e.plain_result(f"已保存角色：{state.name}"))
+                await e.send(e.plain_result(f"已保存卡片：{state.name}"))
             except ValueError as ve:
                 # 捕获名称重复的错误
                 await e.send(e.plain_result(str(ve)))
             except Exception as ex:
-                logger.error(f"保存角色失败: {ex!s}")
-                await e.send(e.plain_result("保存失败，已退出角色编辑。"))
+                logger.error(f"保存卡片失败: {ex!s}")
+                await e.send(e.plain_result("保存失败，已退出卡片编辑。"))
             finally:
                 controller.stop()
             return
@@ -434,7 +434,7 @@ async def add_persona(self, event: AstrMessageEvent, name: GreedyStr):
     try:
         await waiter(event)
     except TimeoutError:
-        yield event.plain_result("会话超时，已退出角色创建。")
+        yield event.plain_result("会话超时，已退出卡片创建。")
     finally:
         event.stop_event()
 
@@ -453,7 +453,7 @@ async def list_personas(self, event: AstrMessageEvent):
     nodes = _build_grouped_persona_nodes(user_id=user_id, user_name=user_name, grouped=grouped)
 
     if not nodes:
-        yield event.plain_result("暂无角色。")
+        yield event.plain_result("卡包为空。")
         return
 
     yield event.chain_result([Comp.Nodes(nodes)])
@@ -466,48 +466,128 @@ async def search_personas(self, event: AstrMessageEvent):
         return
 
     yield event.plain_result(
-        "请输入要搜索的标签（多个标签用空格分隔）\n"
-        "示例：\n"
-        "  大世界 纯爱 - 搜索所有带这两个标签的角色\n"
-        "  纯爱 - 搜索带\"纯爱\"标签的角色"
+        "请选择查找来源：\n"
+        "- /卡包：按标签搜索本地卡片\n"
+        "- /小屋：按关键词搜索卡片小屋帖子标题（输出标题 + ULA）\n"
+        "请输入：/卡包 或 /小屋（/取消 退出）"
     )
 
     timeout = int(self._cfg.session_timeout_sec)
+    initial_event = event
+    initial_sender_id = str(event.get_sender_id())
+    mode: str | None = None
 
     @session_waiter(timeout=timeout, record_history_chains=False)
     async def waiter(controller: SessionController, e: AstrMessageEvent):
-        # 阻止事件传播，避免触发其他处理器（如LLM回复）
-        e.stop_event()
+        nonlocal mode
 
         # 忽略机器人自身消息/空回流事件，避免会话自我触发。
         if self._is_self_message_event(e) or self._is_empty_echo_event(e):
             controller.keep(timeout=timeout, reset_timeout=True)
             return
 
-        text = (getattr(e, "message_str", "") or "").strip()
-
-        if not text:
-            await e.send(e.plain_result("标签不能为空，请重新输入"))
+        # 只接受发起者消息，避免群聊里他人/机器人消息推进流程。
+        if str(e.get_sender_id()) != initial_sender_id:
             controller.keep(timeout=timeout, reset_timeout=True)
             return
 
-        # 解析标签（用空格分隔）
-        search_tags = [t.strip() for t in text.split() if t.strip()]
+        # 避免把触发命令的那条消息当作会话输入。
+        if e is initial_event or self._looks_like_command_message(getattr(e, "message_str", "") or "", "查找卡片"):
+            controller.keep(timeout=timeout, reset_timeout=True)
+            return
 
-        user_id = str(e.get_sender_id())
-        user_name = str(e.get_sender_name())
+        raw_text = (getattr(e, "message_str", "") or "").strip()
+        token = _get_command_token(raw_text)
 
-        grouped = await self._svc.search_by_tags(user_id=user_id, search_tags=search_tags)
+        # 允许用户通过发送其他命令“打断”当前会话：结束会话并放行事件给其他处理器。
+        if token and token not in {"卡包", "小屋", "取消", "退出", "中断"} and mode is None:
+            controller.stop()
+            return
 
-        nodes = _build_grouped_persona_nodes(user_id=user_id, user_name=user_name, grouped=grouped)
+        # 显式退出：/取消 /退出
+        if token in {"取消", "退出", "中断"}:
+            e.stop_event()
+            await e.send(e.plain_result("已退出查找。"))
+            controller.stop()
+            return
+        if mode is None:
+            choice = raw_text.lstrip("/／").strip().split(maxsplit=1)[0].casefold() if raw_text else ""
+            if choice == "卡包":
+                mode = "local"
+                e.stop_event()
+                await e.send(
+                    e.plain_result(
+                        "请输入要搜索的标签（多个标签用空格分隔）\n"
+                        "示例：\n"
+                        "  大世界 纯爱 - 搜索所有带这两个标签的卡片\n"
+                        "  纯爱 - 搜索带\"纯爱\"标签的卡片"
+                    )
+                )
+                controller.keep(timeout=timeout, reset_timeout=True)
+                return
+            if choice == "小屋":
+                mode = "cozynook"
+                e.stop_event()
+                await e.send(e.plain_result("请输入关键词（将匹配卡片小屋帖子标题，支持多个词空格分隔）："))
+                controller.keep(timeout=timeout, reset_timeout=True)
+                return
 
-        if not nodes:
-            tags_display = "、".join(search_tags)
-            await e.send(e.plain_result(f"未找到匹配标签「{tags_display}」的角色。"))
-        else:
-            await e.send(e.chain_result([Comp.Nodes(nodes)]))
+            e.stop_event()
+            await e.send(e.plain_result("请输入：/卡包 或 /小屋（/取消 退出）"))
+            controller.keep(timeout=timeout, reset_timeout=True)
+            return
 
+        # 下面开始处理第二段输入
+        if mode == "local":
+            # 阻止事件传播，避免触发其他处理器（如LLM回复）
+            e.stop_event()
+
+            text = raw_text
+            if not text:
+                await e.send(e.plain_result("标签不能为空，请重新输入"))
+                controller.keep(timeout=timeout, reset_timeout=True)
+                return
+
+            # 解析标签（用空格分隔）
+            search_tags = [t.strip() for t in text.split() if t.strip()]
+
+            user_id = str(e.get_sender_id())
+            user_name = str(e.get_sender_name())
+
+            grouped = await self._svc.search_by_tags(user_id=user_id, search_tags=search_tags)
+
+            nodes = _build_grouped_persona_nodes(user_id=user_id, user_name=user_name, grouped=grouped)
+
+            if not nodes:
+                tags_display = "、".join(search_tags)
+                await e.send(e.plain_result(f"未找到匹配标签「{tags_display}」的卡片。"))
+            else:
+                await e.send(e.chain_result([Comp.Nodes(nodes)]))
+
+            controller.stop()
+            return
+
+        if mode == "cozynook":
+            e.stop_event()
+
+            keyword = normalize_one_line(raw_text).strip()
+            if not keyword:
+                await e.send(e.plain_result("关键词不能为空，请重新输入"))
+                controller.keep(timeout=timeout, reset_timeout=True)
+                return
+
+            from . import pm_commands_cozynook as _pm_commands_cozynook
+
+            async for r in _pm_commands_cozynook.cozynook_search_cards(self, e, keyword):
+                await e.send(r)
+
+            controller.stop()
+            return
+
+        e.stop_event()
+        await e.send(e.plain_result("内部状态异常：已退出查找。"))
         controller.stop()
+        return
 
     try:
         await waiter(event)
@@ -525,7 +605,7 @@ async def switch_persona(self, event: AstrMessageEvent, name: GreedyStr):
 
     name = str(name).strip()
     if not name:
-        yield event.plain_result("用法：/切换角色 名称\n或使用：/休息模式 来清除角色")
+        yield event.plain_result("用法：/切换卡片 名称\n或使用：/休息模式 来清除卡片")
         return
 
     user_id = str(event.get_sender_id())
@@ -558,12 +638,12 @@ async def switch_persona(self, event: AstrMessageEvent, name: GreedyStr):
         )
 
         if name == EMPTY_PERSONA_NAME:
-            yield event.plain_result("已进入休息模式（不使用任何角色）")
+            yield event.plain_result("已进入休息模式（不使用任何卡片）")
         else:
-            yield event.plain_result(f"已切换角色：{name}")
+            yield event.plain_result(f"已切换卡片：{name}")
         return
 
-    yield event.plain_result("未找到该角色（仅支持自己的角色）。")
+    yield event.plain_result("未找到该卡片（仅支持自己的卡片）。")
 
 
 async def switch_to_empty_persona(self, event: AstrMessageEvent):
@@ -594,7 +674,7 @@ async def switch_to_empty_persona(self, event: AstrMessageEvent):
         force=True,
     )
 
-    yield event.plain_result("已进入休息模式（不使用任何角色）")
+    yield event.plain_result("已进入休息模式（不使用任何卡片）")
 
 
 async def current_persona(self, event: AstrMessageEvent):
@@ -611,17 +691,17 @@ async def current_persona(self, event: AstrMessageEvent):
         group_id=group_id,
     )
     if not cur:
-        yield event.plain_result("当前未切换任何角色（休息模式）。")
+        yield event.plain_result("当前未切换任何卡片（休息模式）。")
         return
 
     _scope, name = cur
 
     # 如果是空人设，显示特殊提示
     if name == EMPTY_PERSONA_NAME:
-        yield event.plain_result("当前角色：休息模式（未使用任何角色）")
+        yield event.plain_result("当前卡片：休息模式（未使用任何卡片）")
         return
 
-    yield event.plain_result(f"当前角色：{name}")
+    yield event.plain_result(f"当前卡片：{name}")
 
 
 async def view_persona(self, event: AstrMessageEvent, name: GreedyStr):
@@ -632,7 +712,7 @@ async def view_persona(self, event: AstrMessageEvent, name: GreedyStr):
 
     name = str(name).strip()
     if not name:
-        yield event.plain_result("用法：/查看角色 名称")
+        yield event.plain_result("用法：/查看卡片 名称")
         return
 
     user_id = str(event.get_sender_id())
@@ -640,14 +720,14 @@ async def view_persona(self, event: AstrMessageEvent, name: GreedyStr):
     persona = await self._svc.get_user_persona(user_id=user_id, name=name)
 
     if not persona:
-        yield event.plain_result("未找到该角色（仅支持查看自己的角色）。")
+        yield event.plain_result("未找到该卡片（仅支持查看自己的卡片）。")
         return
 
     # 构建人设信息：人设类型、名称、标签、完整简介
     tags_str = " ".join([f"[{t}]" for t in persona.tags]) if persona.tags else "无"
     user_name = str(event.get_sender_name())
 
-    base_info = (f"【角色】{name}\n" f"标签: {tags_str}")
+    base_info = (f"【卡片】{name}\n" f"标签: {tags_str}")
 
     # 简介分段处理
     intro_parts = split_long_text(persona.intro, max_chars=3000)
@@ -690,7 +770,7 @@ async def delete_persona(self, event: AstrMessageEvent, name: GreedyStr):
 
     name = str(name).strip()
     if not name:
-        yield event.plain_result("用法：/删除角色 名称")
+        yield event.plain_result("用法：/删除卡片 名称")
         return
 
     user_id = str(event.get_sender_id())
@@ -706,7 +786,7 @@ async def delete_persona(self, event: AstrMessageEvent, name: GreedyStr):
     if cur and cur[1] == EMPTY_PERSONA_NAME:
         await self._reset_conversation_if_enabled(event)
 
-    yield event.plain_result(f"已删除角色：{name}")
+    yield event.plain_result(f"已删除卡片：{name}")
 
 
 async def edit_persona(self, event: AstrMessageEvent, name: GreedyStr):
@@ -717,7 +797,7 @@ async def edit_persona(self, event: AstrMessageEvent, name: GreedyStr):
 
     name = str(name).strip()
     if not name:
-        yield event.plain_result("用法：/修改设定 角色名")
+        yield event.plain_result("用法：/修改卡片 卡片名")
         return
 
     user_id = str(event.get_sender_id())
@@ -725,18 +805,18 @@ async def edit_persona(self, event: AstrMessageEvent, name: GreedyStr):
     # 检查人设是否存在且可编辑
     can_edit, reason = await self._svc.can_edit_persona(user_id=user_id, name=name)
     if not can_edit:
-        yield event.plain_result(f"无法修改该设定：{reason}")
+        yield event.plain_result(f"无法修改该卡片：{reason}")
         return
 
     # 获取现有人设信息
     persona = await self._svc.get_user_persona(user_id=user_id, name=name)
     if not persona:
-        yield event.plain_result("角色不存在。")
+        yield event.plain_result("卡片不存在。")
         return
 
     intro_display = truncate_text(persona.intro, 30)
     yield event.plain_result(
-        f"开始修改设定：{name}\n"
+        f"开始修改卡片：{name}\n"
         f"当前简介：{intro_display}\n"
         "请输入新的简介（直接输入覆盖，输入 /保持 则不修改）"
     )
@@ -767,7 +847,7 @@ async def edit_persona(self, event: AstrMessageEvent, name: GreedyStr):
             return
 
         # 同上：避免把触发命令的那条消息当作会话输入。
-        if e is initial_event or self._looks_like_command_message(getattr(e, "message_str", "") or "", "修改设定"):
+        if e is initial_event or self._looks_like_command_message(getattr(e, "message_str", "") or "", "修改卡片"):
             controller.keep(timeout=timeout, reset_timeout=True)
             return
 
@@ -782,7 +862,7 @@ async def edit_persona(self, event: AstrMessageEvent, name: GreedyStr):
         # 显式退出：/取消 /退出
         if token in {"取消", "退出", "中断"}:
             e.stop_event()
-            await e.send(e.plain_result("已退出设定修改流程。"))
+            await e.send(e.plain_result("已退出卡片修改流程。"))
             controller.stop()
             return
 
@@ -803,12 +883,12 @@ async def edit_persona(self, event: AstrMessageEvent, name: GreedyStr):
                     tags=state.tags,
                 )
                 if success:
-                    await e.send(e.plain_result(f"已更新设定：{state.name}"))
+                    await e.send(e.plain_result(f"已更新卡片：{state.name}"))
                 else:
-                    await e.send(e.plain_result("更新失败，角色可能已被删除。"))
+                    await e.send(e.plain_result("更新失败，卡片可能已被删除。"))
             except Exception as ex:
-                logger.error(f"更新角色失败: {ex!s}")
-                await e.send(e.plain_result("更新失败，已退出设定修改。"))
+                logger.error(f"更新卡片失败: {ex!s}")
+                await e.send(e.plain_result("更新失败，已退出卡片修改。"))
             finally:
                 controller.stop()
             return
@@ -818,6 +898,6 @@ async def edit_persona(self, event: AstrMessageEvent, name: GreedyStr):
     try:
         await waiter(event)
     except TimeoutError:
-        yield event.plain_result("会话超时，已退出设定修改。")
+        yield event.plain_result("会话超时，已退出卡片修改。")
     finally:
         event.stop_event()

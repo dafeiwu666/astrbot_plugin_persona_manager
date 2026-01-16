@@ -25,9 +25,9 @@ async def inject_persona(self, event: AstrMessageEvent, req: ProviderRequest):
 
     group_id_str = self._resolve_group_key(event)
 
-    # 外部角色一致性保护：
-    # - 当内部不是休息模式时，默认意味着“我希望使用统一外部角色”
-    # - 如果外部角色已被切走（不再是配置的统一外部ID），则自动切回休息模式，避免错配注入
+    # 外部 persona 一致性保护：
+    # - 当内部不是休息模式时，默认意味着“我希望使用统一外部 persona”
+    # - 如果外部 persona 已被切走（不再是配置的统一外部ID），则自动切回休息模式，避免错配注入
     unified_external_id = self._cfg.external_persona_id.strip()
     if unified_external_id:
         current_external_id = await self._get_current_external_persona_id(event)
@@ -50,7 +50,7 @@ async def inject_persona(self, event: AstrMessageEvent, req: ProviderRequest):
                 event.stop_event()
                 await event.send(
                     event.plain_result(
-                        "检测到外部角色已被切换（不再是小屋内人设），已自动切换为休息模式并重置聊天记录。"
+                        "检测到外部 persona 已被切换（不再是配置的统一外部 persona），已自动切换为休息模式并重置聊天记录。"
                     )
                 )
                 return
@@ -90,7 +90,7 @@ async def inject_persona(self, event: AstrMessageEvent, req: ProviderRequest):
         user_id=user_id, group_id=group_id_str
     )
 
-    # 如果角色被删除，拦截LLM并提醒用户
+    # 如果卡片被删除，拦截LLM并提醒用户
     if result.was_deleted:
         req.cancelled = True
         event.stop_event()  # 停止事件传播
@@ -100,7 +100,7 @@ async def inject_persona(self, event: AstrMessageEvent, req: ProviderRequest):
 
         await event.send(
             event.plain_result(
-                f"检测到你当前使用的角色「{result.deleted_persona_name}」已被删除，已自动切换为休息模式。"
+                f"检测到你当前使用的卡片「{result.deleted_persona_name}」已被删除，已自动切换为休息模式。"
             )
         )
         return
@@ -109,7 +109,7 @@ async def inject_persona(self, event: AstrMessageEvent, req: ProviderRequest):
     if not persona or not persona.content.strip():
         return
 
-    # 1) 先对“角色内容”做可选正则清洗（不清洗前后置提示词）
+    # 1) 先对“卡片内容”做可选正则清洗（不清洗前后置提示词）
     base_text = persona.content
     clean_pattern = ""
     if bool(getattr(persona, "clean_use_config", False)):
